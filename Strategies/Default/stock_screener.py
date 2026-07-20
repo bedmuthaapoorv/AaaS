@@ -77,18 +77,34 @@ def find_trendline_touches(df):
 
 def analyze_stocks(data, universe, sector_ranks):
     results = []
-    
+
+    import generated_rules
+
     for symbol, df in data.items():
         if len(df) < 50:
             continue
-            
+
         try:
-            import generated_rules
-            passed, result_dict = generated_rules.evaluate_stock(symbol, df, universe, sector_ranks)
-            if passed and result_dict:
-                results.append(result_dict)
+            result = generated_rules.evaluate_stock(
+                symbol,
+                df,
+                universe,
+                sector_ranks
+            )
+
+            if result:
+                results.append(result)
+
         except Exception as e:
             print(f"Error evaluating {symbol}: {e}")
+
+            results.append({
+                "Symbol": symbol,
+                "Passed": False,
+                "ClosenessScore": 0,
+                "FailedRules": [str(e)],
+                "Details": {}
+            })
 
     return results
 
@@ -97,20 +113,52 @@ def main():
     data = fetch_data(tickers)
     sector_ranks = calculate_sector_strength(data, STOCK_UNIVERSE)
     results = analyze_stocks(data, STOCK_UNIVERSE, sector_ranks)
-    
-    df_results = pd.DataFrame(results)
-    
-    if not df_results.empty:
-        # Sort by Rank Score
-        df_results = df_results.sort_values(by="Rank Score", ascending=False).head(20)
-        print("\n--- TOP STOCK CANDIDATES ---")
-        # Print tabular format
-        print(df_results.to_string(index=False))
-        # Also save to CSV
-        df_results.to_csv("ideal_stocks.csv", index=False)
-        print("\nResults saved to ideal_stocks.csv")
-    else:
-        print("No stocks passed the criteria.")
+
+    if not results:
+        print("No results generated.")
+        return
+
+    csv_rows = []
+
+    for result in results:
+
+        row = {
+            "Symbol": result["Symbol"],
+            "Passed": result["Passed"],
+            "ClosenessScore": round(
+                result["ClosenessScore"],
+                2
+            ),
+            "FailedRules": "; ".join(
+                result["FailedRules"]
+            )
+        }
+
+        details = result.get("Details", {})
+
+        for key, value in details.items():
+            row[key] = value
+
+        csv_rows.append(row)
+
+    df_results = pd.DataFrame(csv_rows)
+
+    df_results = df_results.sort_values(
+        by="ClosenessScore",
+        ascending=False
+    )
+
+    print("\n--- BEST STOCKS BY CLOSENESS SCORE ---")
+    print(df_results.head(20).to_string(index=False))
+
+    df_results.to_csv(
+        "stock_report.csv",
+        index=False
+    )
+
+    print(
+        "\nResults saved to stock_report.csv"
+    )
 
 if __name__ == "__main__":
     main()

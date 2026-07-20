@@ -24,31 +24,129 @@ def generate_rules():
     print("Generating python screening logic from rules.md...")
     
     prompt = f"""
-    You are an expert quantitative developer. I will provide you with a stock screening rules document in markdown format.
-    Your task is to generate a Python function named `evaluate_stock` that evaluates a stock against these rules.
+You are an expert quantitative developer.
 
-    The function signature must be exactly:
-    ```python
-    def evaluate_stock(symbol, df, universe, sector_ranks):
-        # ... your code ...
-    ```
+Generate production-ready Python code.
 
-    Inputs:
-    - `symbol`: The stock ticker string (e.g. "RELIANCE.NS").
-    - `df`: A pandas DataFrame containing OHLCV data for the stock. Columns include 'Open', 'High', 'Low', 'Close', 'Volume'. It is indexed by Date. 
-    - `universe`: A dictionary where `universe[symbol]["Name"]` and `universe[symbol]["Sector"]` give the company name and sector.
-    - `sector_ranks`: A dictionary mapping sector names to their rank (integer, lower is better).
+The generated file must contain:
 
-    Requirements:
-    1. The function must return a tuple: `(passed, output_dict)`
-       - `passed`: A boolean indicating if the stock passed ALL mandatory and rejection filters.
-       - `output_dict`: A dictionary containing the exact columns specified in the "Output Columns" section of the rules.
-    2. You must import `pandas_ta` as `ta` and any other standard python libraries you need INSIDE the generated python file (at the top).
-    3. Output ONLY valid Python code. Do not wrap it in ```python``` markdown blocks. Do not add any conversational text.
+1. All necessary imports.
+2. A function:
 
-    RULES:
-    {rules_content}
-    """
+def evaluate_stock(symbol, df, universe, sector_ranks):
+
+3. The function must return:
+
+return {{
+    "Symbol": symbol,
+    "Passed": bool,
+    "ClosenessScore": float,
+    "FailedRules": list,
+    "Details": dict
+}}
+
+Definitions:
+
+Passed:
+- True only if ALL mandatory rules pass.
+- False otherwise.
+
+FailedRules:
+- Human readable list of failed rules.
+
+Examples:
+[
+    "RSI outside range (63.5)",
+    "Sector rank 8 not in top 5",
+    "Volume not increasing for last 3 sessions"
+]
+
+Details:
+Store every calculated metric used.
+
+Example:
+{{
+    "RSI": 54.2,
+    "SectorRank": 3,
+    "TrendlineDistancePct": 1.8,
+    "Volume1": 1200000,
+    "Volume2": 1000000,
+    "Volume3": 800000
+}}
+
+ClosenessScore:
+
+Must be between 0 and 100.
+
+Scoring weights:
+
+Trendline Support = 40%
+Sector Strength = 25%
+Volume Trend = 20%
+RSI = 15%
+
+Rule Scoring:
+
+RSI:
+40-60 => 100
+
+Below 40:
+score = max(0, 100 - (40-rsi)*5)
+
+Above 60:
+score = max(0, 100 - (rsi-60)*5)
+
+Volume:
+
+V1 > V2 > V3:
+100
+
+One comparison fails:
+50
+
+Both fail:
+0
+
+Sector:
+
+Rank <= 5:
+100
+
+Rank > 5:
+score = max(0, 100 - (rank-5)*10)
+
+Trendline:
+
+Distance <= 3%:
+100
+
+Distance > 3%:
+score = max(0, 100 - (distance_pct-3)*20)
+
+Overall ClosenessScore:
+
+(
+trendline_score * 0.40 +
+sector_score * 0.25 +
+volume_score * 0.20 +
+rsi_score * 0.15
+)
+
+Requirements:
+
+- Use pandas_ta as ta.
+- Handle missing data safely.
+- Never throw exceptions.
+- Return a valid dictionary even if a stock cannot be evaluated.
+- Use helper functions when needed.
+- Output ONLY valid Python code.
+- No markdown.
+- No explanations.
+
+RULES:
+
+{rules_content}
+"""
 
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
