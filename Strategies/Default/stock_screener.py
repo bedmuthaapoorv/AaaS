@@ -1,5 +1,5 @@
 # pyrefly: ignore [missing-import]
-import yfinance as yf
+from jugaad_data.nse import stock_df
 import pandas as pd
 import numpy as np
 
@@ -18,21 +18,28 @@ STOCK_UNIVERSE = get_top_stocks_by_sector(limit_per_sector=50)
 if not STOCK_UNIVERSE:
     print("Warning: Dynamic fetch failed, falling back to basic sample.")
     STOCK_UNIVERSE = {
-        "RELIANCE.NS": {"Name": "Reliance Industries", "Sector": "Energy"},
-        "TCS.NS": {"Name": "Tata Consultancy Services", "Sector": "IT"},
+        "RELIANCE": {"Name": "Reliance Industries", "Sector": "Energy"},
+        "TCS": {"Name": "Tata Consultancy Services", "Sector": "IT"},
     }
 
-def fetch_data(tickers, period="1y"):
+def fetch_data(tickers, days=365):
     """Fetch historical data for all tickers."""
     print("Fetching data...")
+    to_date = datetime.date.today()
+    from_date = to_date - datetime.timedelta(days=days)
     data = {}
     for ticker in tickers:
         try:
-            df = yf.download(ticker, period=period, progress=False)
-            if not df.empty and len(df) > 100:
-                # Flatten MultiIndex columns if present (yfinance sometimes returns this)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
+            df = stock_df(symbol=ticker, from_date=from_date, to_date=to_date, series="EQ")
+            if df is not None and not df.empty and len(df) > 100:
+                df = df.sort_values(by="DATE").set_index("DATE")
+                df = df.rename(columns={
+                    "OPEN": "open",
+                    "HIGH": "high",
+                    "LOW": "low",
+                    "CLOSE": "close",
+                    "VOLUME": "volume",
+                })
                 data[ticker] = df
         except Exception as e:
             print(f"Failed to fetch {ticker}: {e}")

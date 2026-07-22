@@ -1,3 +1,9 @@
 Strategies/Default/.env
 Strategies/Default/__pycache__/generated_rules.cpython-312.pyc
 Strategies/Default/__pycache__/universe_fetcher.cpython-312.pyc
+Strategies/Default/stock_report.csv
+Strategies/Default/universe_cache.json
+Strategies/Default/__pycache__/*.pyc
+Strategies/Default/__pycache__/*.pyc
+Strategies/Default/__pycache__/*.pyc
+Strategies/Default/.env.template

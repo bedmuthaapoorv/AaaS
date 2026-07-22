@@ -1,5 +1,7 @@
-yfinance
+jugaad-data
 pandas
 numpy
 scipy
 pandas_ta
+python-dotenv
+google-genai
