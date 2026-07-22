@@ -1,7 +1,5 @@
 import pandas as pd
-# pyrefly: ignore [missing-import]
 import numpy as np
-# pyrefly: ignore [missing-import]
 import pandas_ta as ta
 
 def get_rsi(df):

@@ -5,3 +5,4 @@ scipy
 pandas_ta
 python-dotenv
 google-genai
+streamlit
