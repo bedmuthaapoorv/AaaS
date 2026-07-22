@@ -1,10 +1,12 @@
 # pyrefly: ignore [missing-import]
 from jugaad_data.nse import stock_df
 import pandas as pd
+# pyrefly: ignore [missing-import]
 import numpy as np
 
 # pyrefly: ignore [missing-import]
 import pandas_ta as ta
+# pyrefly: ignore [missing-import]
 from scipy.stats import linregress
 import datetime
 import warnings
@@ -22,7 +24,7 @@ if not STOCK_UNIVERSE:
         "TCS": {"Name": "Tata Consultancy Services", "Sector": "IT"},
     }
 
-def fetch_data(tickers, days=365):
+def fetch_data(tickers, days=400):
     """Fetch historical data for all tickers."""
     print("Fetching data...")
     to_date = datetime.date.today()
@@ -46,21 +48,32 @@ def fetch_data(tickers, days=365):
     return data
 
 def calculate_sector_strength(data, universe):
-    """Calculate relative sector strength (mock implementation for demonstration)."""
-    # In a real scenario, this would aggregate returns and volume across all stocks in a sector.
-    # Here, we assign random ranks for demonstration since we have a tiny universe.
-    sectors = list(set([info["Sector"] for info in universe.values()]))
-    
-    # Let's say Financial Services and IT are always top for testing
-    ranked_sectors = {
-        "Financial Services": 1,
-        "IT": 2,
-        "Energy": 3,
-        "Consumer Goods": 4,
-        "Telecommunication": 5,
-        "Construction": 6
+    """Rank sectors by average 30-day return and map each symbol to its sector's rank."""
+    sector_returns = {}
+
+    for symbol, info in universe.items():
+        df = data.get(symbol)
+        if df is None or len(df) < 30:
+            continue
+
+        recent = df["close"].iloc[-30:]
+        pct_return = (recent.iloc[-1] - recent.iloc[0]) / recent.iloc[0] * 100
+
+        sector = info["Sector"]
+        sector_returns.setdefault(sector, []).append(pct_return)
+
+    sector_avg_return = {
+        sector: sum(returns) / len(returns)
+        for sector, returns in sector_returns.items()
     }
-    return ranked_sectors
+
+    ranked_sectors = sorted(sector_avg_return, key=sector_avg_return.get, reverse=True)
+    sector_rank = {sector: rank + 1 for rank, sector in enumerate(ranked_sectors)}
+
+    return {
+        symbol: sector_rank.get(info["Sector"], 99)
+        for symbol, info in universe.items()
+    }
 
 def find_trendline_touches(df):
     """Find trendline touches and distance."""
