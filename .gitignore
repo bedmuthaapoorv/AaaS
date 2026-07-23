@@ -3,8 +3,13 @@ Strategies/Default/__pycache__/generated_rules.cpython-312.pyc
 Strategies/Default/__pycache__/universe_fetcher.cpython-312.pyc
 Strategies/Default/stock_report.csv
 Strategies/Default/universe_cache.json
+Strategies/Default/backtest_trades.csv
+Strategies/Default/backtest_summary.csv
+Strategies/Default/backtest_cache/
+Strategies/Default/backtest_run.log
 Strategies/Default/__pycache__/*.pyc
 Strategies/Default/__pycache__/*.pyc
 Strategies/Default/__pycache__/*.pyc
 Strategies/Default/.env.template
 Strategies/.claude/launch.json
+Strategies/universe_cache.json
