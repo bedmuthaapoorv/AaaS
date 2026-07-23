@@ -4,7 +4,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import pandas as pd
-from jugaad_data.nse import stock_df
+
+from nse_utils import fetch_stock_history
 
 CACHE_FILE = "universe_cache.json"
 CACHE_EXPIRY_DAYS = 1
@@ -22,7 +23,7 @@ def fetch_nifty_50():
 
 def fetch_symbol_return(symbol, from_date, to_date):
     """Fetches 6-month history for a single symbol and returns its % return."""
-    df = stock_df(symbol=symbol, from_date=from_date, to_date=to_date, series="EQ")
+    df = fetch_stock_history(symbol=symbol, from_date=from_date, to_date=to_date, series="EQ")
     if df is None or df.empty or len(df) <= 10:
         return None
 
@@ -66,7 +67,7 @@ def get_top_stocks_by_sector(limit_per_sector=50):
         for _, row in nifty50_df.iterrows()
     }
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=5) as executor:
         future_to_symbol = {
             executor.submit(fetch_symbol_return, symbol, from_date, to_date): symbol
             for symbol in tickers_list

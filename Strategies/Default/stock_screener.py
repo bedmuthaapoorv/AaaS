@@ -1,5 +1,3 @@
-# pyrefly: ignore [missing-import]
-from jugaad_data.nse import stock_df
 import pandas as pd
 # pyrefly: ignore [missing-import]
 import numpy as np
@@ -13,6 +11,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from universe_fetcher import get_top_stocks_by_sector
+from nse_utils import fetch_stock_history
 
 # 1. Fetch Dynamic Stock Universe by Sector
 print("Initializing Dynamic Stock Universe...")
@@ -32,7 +31,7 @@ def fetch_data(tickers, days=400):
     data = {}
     for ticker in tickers:
         try:
-            df = stock_df(symbol=ticker, from_date=from_date, to_date=to_date, series="EQ")
+            df = fetch_stock_history(symbol=ticker, from_date=from_date, to_date=to_date, series="EQ")
             if df is not None and not df.empty and len(df) > 100:
                 df = df.sort_values(by="DATE").set_index("DATE")
                 df = df.rename(columns={

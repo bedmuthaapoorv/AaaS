@@ -145,6 +145,19 @@ Requirements:
 - No markdown.
 - No explanations.
 
+Critical implementation constraints:
+
+- Never hardcode pandas_ta output column names (e.g. "BBL_20_2.0"). Column
+  suffixes vary by pandas_ta version. Instead, select columns by prefix, e.g.:
+  bb = ta.bbands(df['close'], length=20, std=2)
+  lower_bb_col = next(c for c in bb.columns if c.startswith('BBL_'))
+  lower_bb = bb[lower_bb_col].iloc[-1]
+  Apply the same prefix-matching approach for any other multi-column
+  pandas_ta indicator (MACD, Stochastic, ADX, etc.).
+- The top-level try/except in evaluate_stock must never swallow the error
+  message. On exception, append f"Calculation error: {{e}}" (the actual
+  exception text) to FailedRules, not a generic "Calculation error" string.
+
 RULES:
 
 {rules_content}
