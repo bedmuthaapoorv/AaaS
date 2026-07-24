@@ -193,17 +193,42 @@ with tab_backtest:
         "at the range's last close if neither is hit."
     )
 
+    backtest_guide_path = os.path.join(APP_DIR, "BACKTEST_GUIDE.md")
+    if os.path.exists(backtest_guide_path):
+        with st.expander("New to backtesting? Read the guide"):
+            with open(backtest_guide_path, "r") as f:
+                st.markdown(f.read())
+
     col1, col2 = st.columns(2)
     with col1:
         start_date = st.date_input("Start date")
     with col2:
         end_date = st.date_input("End date")
 
-    col3, col4 = st.columns(2)
-    with col3:
-        sl_pct = st.number_input("Stop-loss %", min_value=0.1, value=5.0, step=0.5)
-    with col4:
-        tp_pct = st.number_input("Take-profit %", min_value=0.1, value=10.0, step=0.5)
+    exit_mode_label = st.radio(
+        "Exit strategy",
+        ["Fixed Stop-Loss / Take-Profit %", "Trailing ATR stop"],
+        horizontal=True,
+    )
+    exit_mode = "fixed" if exit_mode_label.startswith("Fixed") else "trailing_atr"
+
+    sl_pct = tp_pct = atr_period = atr_multiplier = None
+    if exit_mode == "fixed":
+        col3, col4 = st.columns(2)
+        with col3:
+            sl_pct = st.number_input("Stop-loss %", min_value=0.1, value=5.0, step=0.5)
+        with col4:
+            tp_pct = st.number_input("Take-profit %", min_value=0.1, value=10.0, step=0.5)
+    else:
+        st.caption(
+            "No fixed take-profit — lets winners run and exits only when price falls "
+            "atr_multiplier x ATR below the highest close since entry."
+        )
+        col3, col4 = st.columns(2)
+        with col3:
+            atr_period = st.number_input("ATR period (days)", min_value=2, value=14, step=1)
+        with col4:
+            atr_multiplier = st.number_input("ATR multiplier", min_value=0.5, value=3.0, step=0.5)
 
     st.caption(
         "First run for a given date range fetches history from NSE and caches it in "
@@ -223,7 +248,8 @@ with tab_backtest:
                 high_min = est["estimated_high_seconds"] / 60
                 st.info(
                     f"{est['to_fetch_stocks']} of {est['total_stocks']} stocks need fetching from NSE "
-                    f"for this range — estimated **{low_min:.1f}-{high_min:.1f} min**. "
+                    f"(~{est['months_per_stock']} monthly requests each for this range) — "
+                    f"estimated **{low_min:.1f}-{high_min:.1f} min**. "
                     f"({est['cached_stocks']} already cached.)"
                 )
         except Exception:
@@ -242,9 +268,13 @@ with tab_backtest:
             args = [
                 "--start", start_date.isoformat(),
                 "--end", end_date.isoformat(),
-                "--sl", str(sl_pct),
-                "--tp", str(tp_pct),
+                "--exit-mode", exit_mode,
             ]
+            if exit_mode == "fixed":
+                args += ["--sl", str(sl_pct), "--tp", str(tp_pct)]
+            else:
+                args += ["--atr-period", str(int(atr_period)), "--atr-multiplier", str(atr_multiplier)]
+
             log_file = open(BACKTEST_LOG_PATH, "w")
             process = subprocess.Popen(
                 [sys.executable, "backtest.py", *args],

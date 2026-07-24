@@ -1,78 +1,83 @@
 import pandas as pd
-import numpy as np
 import pandas_ta as ta
-from scipy.stats import linregress
+import numpy as np
 
 def evaluate_stock(symbol, df, universe, sector_ranks):
     failed_rules = []
     details = {}
     
     try:
-        if len(df) < 130:
-            return {"Symbol": symbol, "Passed": False, "ClosenessScore": 0.0, "FailedRules": ["Insufficient data"], "Details": {}}
+        if len(df) < 100:
+            return {"Symbol": symbol, "Passed": False, "ClosenessScore": 0.0, "FailedRules": ["Insufficient data (<100 sessions)"], "Details": {}}
 
-        # RSI Calculation
-        rsi_df = ta.rsi(df['close'], length=14)
-        rsi_val = rsi_df.iloc[-1]
-        details["RSI"] = float(rsi_val)
+        close = df['close']
+        volume = df['volume']
         
-        # Volume Trend
-        v1, v2, v3 = df['volume'].iloc[-1], df['volume'].iloc[-2], df['volume'].iloc[-3]
-        details.update({"Volume1": float(v1), "Volume2": float(v2), "Volume3": float(v3)})
+        # Indicators
+        rsi_series = ta.rsi(close, length=14)
+        rsi = rsi_series.iloc[-1] if not rsi_series.empty else np.nan
         
-        # Sector Rank
+        sma20 = ta.sma(close, length=20).iloc[-1]
+        sma100 = ta.sma(close, length=100).iloc[-1]
+        
+        bb = ta.bbands(close, length=20, std=2)
+        lbb_col = next((c for c in bb.columns if c.startswith('BBL_')), None)
+        lbb = bb[lbb_col].iloc[-1] if lbb_col else np.nan
+        
+        vol_prev = volume.iloc[-2]
+        avg_vol20 = volume.iloc[-21:-1].mean()
+        
+        dist_sma20 = ((sma20 - close.iloc[-1]) / sma20) * 100
         sector_rank = sector_ranks.get(symbol, 99)
-        details["SectorRank"] = sector_rank
         
-        # 52 Week High
-        high_252 = df['high'].rolling(252).max()
-        days_since_high = (high_252 == df['high']).iloc[-30:].sum()
-        details["DaysSince52WeekHigh"] = int(days_since_high)
+        details = {
+            "RSI": float(rsi),
+            "SMA20": float(sma20),
+            "DistanceFromSMA20": float(dist_sma20),
+            "LowerBB": float(lbb),
+            "VolumePrev": float(vol_prev),
+            "AvgVolume20": float(avg_vol20),
+            "SMA100": float(sma100),
+            "SectorRank": int(sector_rank)
+        }
+
+        # Mandatory Rules
+        if np.isnan(rsi) or rsi > 30:
+            failed_rules.append(f"RSI {rsi:.2f} not <= 30")
         
-        # Trendline Logic (Simplified approximation for production)
-        # Find local minima over 126 days
-        lookback = 126
-        recent_df = df.iloc[-lookback:].copy()
-        recent_df['minima'] = recent_df['low'][(recent_df['low'].shift(1) > recent_df['low']) & (recent_df['low'].shift(-1) > recent_df['low'])]
-        minima_indices = recent_df.index[recent_df['minima'].notna()].tolist()
-        
-        trendline_dist = 10.0
-        touch_count = len(minima_indices)
-        if touch_count >= 2:
-            x = np.arange(len(recent_df))
-            slope, intercept, _, _, _ = linregress(x, recent_df['low'])
-            trendline_val = slope * (len(recent_df) - 1) + intercept
-            trendline_dist = abs((df['close'].iloc[-1] - trendline_val) / trendline_val) * 100
-        
-        details["TrendlineDistancePct"] = float(trendline_dist)
-        details["TrendlineTouches"] = touch_count
-        
+        if close.iloc[-1] >= sma20 or dist_sma20 < 5:
+            failed_rules.append("Price not extended below SMA20 by 5%")
+            
+        if close.iloc[-1] > lbb:
+            failed_rules.append("Price above Lower Bollinger Band")
+            
+        if vol_prev <= (1.5 * avg_vol20):
+            failed_rules.append("Volume capitulation not met")
+            
+        if close.iloc[-1] < (0.85 * sma100):
+            failed_rules.append("Structural breakdown (Price < 85% SMA100)")
+            
+        if sector_rank > 10:
+            failed_rules.append(f"Sector rank {sector_rank} not in top 10")
+
+        passed = len(failed_rules) == 0
+
         # Scoring
-        rsi_score = 100 if 40 <= rsi_val <= 60 else (max(0, 100 - (40 - rsi_val) * 5) if rsi_val < 40 else max(0, 100 - (rsi_val - 60) * 5))
+        rsi_score = max(0, (30 - rsi) * (100 / 30)) if not np.isnan(rsi) else 0
+        dist_score = min(100, dist_sma20 * 10)
+        vol_score = min(100, ((vol_prev / avg_vol20) - 1) * 100) if avg_vol20 > 0 else 0
+        sec_score = max(0, 100 - (sector_rank - 1) * 10)
         
-        vol_score = 100 if (v1 > v2 > v3) else (50 if (v1 > v2 or v2 > v3) else 0)
-        
-        sec_score = 100 if sector_rank <= 5 else max(0, 100 - (sector_rank - 5) * 10)
-        
-        tl_score = 100 if trendline_dist <= 3 else max(0, 100 - (trendline_dist - 3) * 20)
-        
-        closeness_score = (tl_score * 0.40) + (sec_score * 0.25) + (vol_score * 0.20) + (rsi_score * 0.15)
-        
-        # Mandatory Rules Check
-        if not (v1 > v2 > v3): failed_rules.append("Volume not increasing for last 3 sessions")
-        if not (40 <= rsi_val <= 60): failed_rules.append(f"RSI outside range ({rsi_val:.1f})")
-        if days_since_high > 0: failed_rules.append("Recent 52-week high detected")
-        if sector_rank > 5: failed_rules.append(f"Sector rank {sector_rank} not in top 5")
-        if touch_count < 2 or trendline_dist > 3: failed_rules.append("Trendline support criteria not met")
-        
+        closeness = (rsi_score * 0.35) + (dist_score * 0.30) + (vol_score * 0.20) + (sec_score * 0.15)
+
         return {
             "Symbol": symbol,
-            "Passed": len(failed_rules) == 0,
-            "ClosenessScore": float(closeness_score),
+            "Passed": passed,
+            "ClosenessScore": float(closeness),
             "FailedRules": failed_rules,
             "Details": details
         }
-        
+
     except Exception as e:
         return {
             "Symbol": symbol,

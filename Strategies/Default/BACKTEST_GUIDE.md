@@ -14,15 +14,40 @@ uses. Whenever a stock signals a pass:
 
 1. It opens a flat **₹100 trade** at the **next trading day's open**.
 2. It walks forward day by day, checking that day's **closing price only**
-   (not intraday highs/lows) against your stop-loss and take-profit
-   percentages.
-3. It exits as soon as either threshold is hit, or — if neither is hit
+   (not intraday highs/lows) against your chosen exit strategy.
+3. It exits as soon as the exit condition fires, or — if it never fires
    before your chosen end date — force-exits at the last available close in
    the range, tagged `RangeEnd`.
 
 A stock can open **multiple simultaneous trades** if it signals again while
 an earlier trade on it is still open — each signal is treated as its own
 independent ₹100 bet.
+
+### Exit strategy: Fixed SL/TP vs. Trailing ATR
+
+Choose one in the UI before running:
+
+- **Fixed Stop-Loss / Take-Profit %** (default) — exits the moment the
+  closing price crosses either a fixed % below entry (stop-loss) or a fixed
+  % above entry (take-profit). Tagged `SL` or `TP` in the trade output.
+- **Trailing ATR stop** — no fixed take-profit at all; instead it trails a
+  stop below the trade's highest close so far, letting winners run as long
+  as the trend holds:
+  - At entry, computes ATR (Average True Range) over your chosen period
+    (default 14 days), using only data through the signal day — no
+    look-ahead.
+  - That ATR value is fixed for the life of the trade (not recalculated
+    daily) — this keeps the stop's distance stable and avoids the trade
+    getting a tighter/looser stop just because volatility changed later.
+  - Each day, the stop is `(highest close since entry) - (ATR multiplier x
+    ATR at entry)`. If a day's close falls to or below that level, the trade
+    exits, tagged `TrailingATR`.
+  - A larger ATR multiplier (e.g. 4-5) gives the trade more room to breathe
+    before stopping out; a smaller one (e.g. 1.5-2) cuts losers faster but
+    also exits winners sooner on ordinary pullbacks.
+  - If there isn't enough history yet to compute the ATR at signal time
+    (very early in the date range), that particular signal is skipped
+    rather than opening an unprotected trade.
 
 ## Estimated time before you run
 
@@ -62,7 +87,8 @@ One row per simulated trade:
 | `EntryPrice` | That day's opening price. |
 | `ExitDate` | The day the trade closed out. |
 | `ExitPrice` | The closing price on the exit day. |
-| `ExitReason` | `SL` (stop-loss hit), `TP` (take-profit hit), or `RangeEnd` (neither hit before the date range ended — forced exit). |
+| `ExitReason` | `SL` / `TP` (fixed mode), `TrailingATR` (ATR mode), or `RangeEnd` (nothing triggered before the date range ended — forced exit). |
+| `ATRAtEntry` | The ATR value used to size the trailing stop (trailing ATR mode only; blank for fixed mode). |
 | `ClosenessScore` | The strategy's own ranking score (0-100) at signal time. |
 | `ProfitRs` | Profit in rupees on the flat ₹100 stake (equivalently, % return). |
 
