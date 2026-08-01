@@ -1,11 +1,12 @@
 """
-Backtests the strategy currently defined in generated_rules.py over a
+Backtests the strategy currently defined in generated_rules.py, using the
+exit logic currently defined in generated_exit_strategy.py, over a
 historical date range.
 
-Standalone module: only depends on universe_fetcher, nse_utils, and
-generated_rules - no dependency on stock_screener.py or app.py, so this can
-be lifted into a separate service later by wrapping run_backtest() in an
-API endpoint.
+Standalone module: only depends on universe_fetcher, nse_utils,
+generated_rules, and generated_exit_strategy - no dependency on
+stock_screener.py or app.py, so this can be lifted into a separate service
+later by wrapping run_backtest() in an API endpoint.
 
 Mechanics:
 - On each trading day in [start_date, end_date], evaluates every universe
@@ -13,9 +14,14 @@ Mechanics:
   look-ahead), via the same generated_rules.evaluate_stock() the live
   screener uses.
 - On a pass, opens a flat Rs.100 trade at the *next* trading day's open.
-- Walks forward day by day (close price only, no intraday) until the close
-  hits the stop-loss or take-profit threshold, or the date range ends (force
-  exit at the range's last close, tagged 'RangeEnd').
+- Walks forward day by day (close price only, no intraday by default -
+  generated_exit_strategy.py decides the exact exit condition, since it's
+  generated from exit_rules.md the same way generated_rules.py is generated
+  from rules.md) until generated_exit_strategy.resolve_exit() finds an exit,
+  or the date range ends. This module - not the generated exit logic -
+  always force-closes any still-open trade at the range's last close,
+  tagged 'RangeEnd', so that fallback can never be silently missed by a
+  regenerated exit strategy.
 - Multiple simultaneous trades on the same symbol are allowed - every
   signal opens its own independent trade.
 """
@@ -30,12 +36,11 @@ import warnings
 warnings.filterwarnings("ignore")
 
 import pandas as pd
-# pyrefly: ignore [missing-import]
-import pandas_ta as ta
 
 from universe_fetcher import get_top_stocks_by_sector
 from nse_utils import fetch_stock_history, calculate_sector_strength
 import generated_rules
+import generated_exit_strategy
 
 WARMUP_DAYS = 400
 MIN_HISTORY_ROWS = 60
@@ -153,31 +158,20 @@ def load_universe_history(universe, start_date, end_date, warmup_days=WARMUP_DAY
     return data
 
 
-def _atr_at(df_slice, atr_period):
-    """ATR(atr_period) as of the last row of df_slice, or None if there's
-    not enough history yet."""
-    if len(df_slice) < atr_period + 1:
-        return None
-    atr_series = ta.atr(df_slice["high"], df_slice["low"], df_slice["close"], length=atr_period)
-    if atr_series is None or atr_series.empty or pd.isna(atr_series.iloc[-1]):
-        return None
-    return float(atr_series.iloc[-1])
+def _open_and_resolve_trade(symbol, full_df, signal_day, end_date, closeness_score):
+    """Enter at the next trading day's open after signal_day, then hand off
+    to generated_exit_strategy.resolve_exit() to decide when to exit.
 
+    generated_exit_strategy.py is regenerated from exit_rules.md the same
+    way generated_rules.py is regenerated from rules.md - this function
+    doesn't know or care what exit logic it implements (fixed SL/TP,
+    trailing ATR, or anything else the user writes).
 
-def _open_and_resolve_trade(
-    symbol, full_df, signal_day, end_date, closeness_score,
-    exit_mode="fixed", sl_pct=None, tp_pct=None, atr_period=14, atr_multiplier=3.0,
-):
-    """Enter at the next trading day's open after signal_day, then walk
-    forward (close-only, no intraday) until the exit condition fires or
-    end_date is reached.
-
-    exit_mode="fixed": exits at fixed sl_pct/tp_pct off the entry price.
-    exit_mode="trailing_atr": no fixed take-profit - trails a stop at
-    (highest close since entry) - atr_multiplier * ATR, where ATR is
-    computed once at entry (using only data up to and including signal_day,
-    so no look-ahead) and held fixed for the life of the trade. Lets winners
-    run; only exits on the downside trail or RangeEnd.
+    If resolve_exit() returns None (no exit condition fired) or raises, this
+    function - not the generated exit logic - force-closes the trade at the
+    last available close in range, tagged 'RangeEnd'. This guarantee holds
+    regardless of what exit_rules.md says, so a regenerated exit strategy
+    can never accidentally leave a trade open forever.
     """
     future = full_df[(full_df.index.date > signal_day) & (full_df.index.date <= end_date)]
     if future.empty:
@@ -185,43 +179,28 @@ def _open_and_resolve_trade(
 
     entry_date = future.index[0]
     entry_price = float(future["open"].iloc[0])
+    signal_history = full_df[full_df.index.date <= signal_day]
 
-    atr_at_entry = None
-    if exit_mode == "trailing_atr":
-        history_to_signal = full_df[full_df.index.date <= signal_day]
-        atr_at_entry = _atr_at(history_to_signal, atr_period)
-        if atr_at_entry is None:
-            return None  # not enough history to size a trailing stop safely
-        sl_price = entry_price - atr_multiplier * atr_at_entry
-        tp_price = None
+    exit_result = None
+    try:
+        exit_result = generated_exit_strategy.resolve_exit(entry_price, entry_date, signal_history, future)
+    except Exception:
+        exit_result = None
+
+    if exit_result is not None:
+        exit_date = exit_result["ExitDate"]
+        exit_price = float(exit_result["ExitPrice"])
+        exit_reason = exit_result["ExitReason"]
     else:
-        sl_price = entry_price * (1 - sl_pct / 100)
-        tp_price = entry_price * (1 + tp_pct / 100)
-
-    highest_close = entry_price
-    exit_date, exit_price, exit_reason = None, None, None
-    for ts, row in future.iterrows():
-        close = float(row["close"])
-
-        if exit_mode == "trailing_atr":
-            highest_close = max(highest_close, close)
-            trailing_stop = highest_close - atr_multiplier * atr_at_entry
-            if close <= trailing_stop:
-                exit_date, exit_price, exit_reason = ts, close, "TrailingATR"
-                break
-        else:
-            if close <= sl_price:
-                exit_date, exit_price, exit_reason = ts, close, "SL"
-                break
-            if close >= tp_price:
-                exit_date, exit_price, exit_reason = ts, close, "TP"
-                break
-
-    if exit_date is None:
         exit_date = future.index[-1]
         exit_price = float(future["close"].iloc[-1])
         exit_reason = "RangeEnd"
 
+    # pd.Timestamp is itself a subclass of datetime.date (via datetime.datetime),
+    # so a plain isinstance check can't distinguish them - always normalize
+    # through pd.Timestamp(...).date() instead, which is safe for a
+    # datetime.date, a datetime.datetime, or a pd.Timestamp alike.
+    exit_date = pd.Timestamp(exit_date).date()
     profit_rs = (exit_price - entry_price) / entry_price * 100  # on a flat Rs.100 stake
 
     return {
@@ -229,31 +208,24 @@ def _open_and_resolve_trade(
         "SignalDate": signal_day,
         "EntryDate": entry_date.date(),
         "EntryPrice": round(entry_price, 2),
-        "ExitDate": exit_date.date(),
+        "ExitDate": exit_date,
         "ExitPrice": round(exit_price, 2),
         "ExitReason": exit_reason,
-        "ATRAtEntry": round(atr_at_entry, 2) if atr_at_entry is not None else None,
         "ClosenessScore": round(float(closeness_score), 2),
         "ProfitRs": round(profit_rs, 2),
     }
 
 
-def run_backtest(
-    start_date, end_date, sl_pct=None, tp_pct=None, limit_per_sector=50, progress_callback=None,
-    exit_mode="fixed", atr_period=14, atr_multiplier=3.0,
-):
+def run_backtest(start_date, end_date, limit_per_sector=50, progress_callback=None):
     """Run the backtest. Returns (trades_df, summary_df).
 
     progress_callback, if given, is called as progress_callback(done, total, day)
     once per simulated trading day.
 
-    exit_mode="fixed" (default) uses sl_pct/tp_pct off the entry price.
-    exit_mode="trailing_atr" ignores sl_pct/tp_pct and instead trails a stop
-    at atr_multiplier x ATR(atr_period) below the highest close since entry,
-    with no fixed take-profit.
+    Exit logic comes entirely from generated_exit_strategy.py (regenerated
+    from exit_rules.md) - this function doesn't take SL/TP/ATR parameters
+    itself; edit exit_rules.md and regenerate to change exit behavior.
     """
-    if exit_mode == "fixed" and (sl_pct is None or tp_pct is None):
-        raise ValueError("sl_pct and tp_pct are required when exit_mode='fixed'.")
     universe = get_top_stocks_by_sector(limit_per_sector=limit_per_sector)
     if not universe:
         raise RuntimeError("Could not build stock universe.")
@@ -310,14 +282,16 @@ def run_backtest(
                 continue
 
             trade = _open_and_resolve_trade(
-                symbol, data[symbol], day, end_date, result.get("ClosenessScore", 0.0),
-                exit_mode=exit_mode, sl_pct=sl_pct, tp_pct=tp_pct,
-                atr_period=atr_period, atr_multiplier=atr_multiplier,
+                symbol, data[symbol], day, end_date, result.get("ClosenessScore", 0.0)
             )
             if trade:
                 trades.append(trade)
 
-    trades_df = pd.DataFrame(trades)
+    trade_columns = [
+        "Symbol", "SignalDate", "EntryDate", "EntryPrice",
+        "ExitDate", "ExitPrice", "ExitReason", "ClosenessScore", "ProfitRs",
+    ]
+    trades_df = pd.DataFrame(trades, columns=trade_columns)
     summary_df = summarize_trades(trades_df)
     return trades_df, summary_df
 
@@ -349,32 +323,23 @@ def _parse_date(s):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Backtest the current generated_rules.py strategy.")
+    parser = argparse.ArgumentParser(
+        description="Backtest the current generated_rules.py strategy using generated_exit_strategy.py for exits."
+    )
     parser.add_argument("--start", required=True, type=_parse_date, help="Start date YYYY-MM-DD")
     parser.add_argument("--end", required=True, type=_parse_date, help="End date YYYY-MM-DD")
-    parser.add_argument("--exit-mode", choices=["fixed", "trailing_atr"], default="fixed")
-    parser.add_argument("--sl", type=float, help="Stop-loss percent, e.g. 5 (required if --exit-mode=fixed)")
-    parser.add_argument("--tp", type=float, help="Take-profit percent, e.g. 10 (required if --exit-mode=fixed)")
-    parser.add_argument("--atr-period", type=int, default=14, help="ATR lookback period (trailing_atr mode)")
-    parser.add_argument("--atr-multiplier", type=float, default=3.0, help="ATR multiplier for the trailing stop (trailing_atr mode)")
     parser.add_argument("--limit-per-sector", type=int, default=50)
     parser.add_argument("--trades-out", default="backtest_trades.csv")
     parser.add_argument("--summary-out", default="backtest_summary.csv")
     args = parser.parse_args()
 
-    if args.exit_mode == "fixed" and (args.sl is None or args.tp is None):
-        parser.error("--sl and --tp are required when --exit-mode=fixed")
-
     def progress(done, total, day):
         print(f"Evaluating day {done}/{total} ({day})...")
 
     trades_df, summary_df = run_backtest(
-        args.start, args.end, sl_pct=args.sl, tp_pct=args.tp,
+        args.start, args.end,
         limit_per_sector=args.limit_per_sector,
         progress_callback=progress,
-        exit_mode=args.exit_mode,
-        atr_period=args.atr_period,
-        atr_multiplier=args.atr_multiplier,
     )
 
     trades_df.to_csv(args.trades_out, index=False)

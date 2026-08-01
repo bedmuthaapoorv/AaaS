@@ -17,7 +17,7 @@ def generate_rules():
         sys.exit(1)
 
     try:
-        with open("rules.md", "r") as f:
+        with open("rules.md", "r", encoding="utf-8") as f:
             rules_content = f.read()
     except FileNotFoundError:
         print("Error: rules.md not found in the current directory.")
@@ -157,6 +157,11 @@ Critical implementation constraints:
 - The top-level try/except in evaluate_stock must never swallow the error
   message. On exception, append f"Calculation error: {{e}}" (the actual
   exception text) to FailedRules, not a generic "Calculation error" string.
+- `universe` maps symbol -> {{"Name": str, "Sector": str}} (capitalized keys).
+  `sector_ranks` maps symbol -> int directly (NOT sector name -> int). To get
+  a stock's sector rank, use `sector_ranks.get(symbol, 99)` directly - do NOT
+  look up the stock's sector name first and then index sector_ranks by that
+  name; sector_ranks is never keyed by sector name.
 
 RULES:
 
@@ -180,7 +185,7 @@ RULES:
     if code.endswith("```"):
         code = code[:-3]
 
-    with open("generated_rules.py", "w") as f:
+    with open("generated_rules.py", "w", encoding="utf-8") as f:
         f.write(code)
 
     print("Successfully generated generated_rules.py!")

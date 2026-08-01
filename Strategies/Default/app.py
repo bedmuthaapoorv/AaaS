@@ -13,33 +13,36 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 RULES_PATH = os.path.join(APP_DIR, "rules.md")
 REPORT_PATH = os.path.join(APP_DIR, "stock_report.csv")
 BACKUP_DIR = os.path.normpath(os.path.join(APP_DIR, "..", "Rules_backup"))
+EXIT_RULES_PATH = os.path.join(APP_DIR, "exit_rules.md")
+EXIT_BACKUP_DIR = os.path.normpath(os.path.join(APP_DIR, "..", "ExitRules_backup"))
 BACKTEST_TRADES_PATH = os.path.join(APP_DIR, "backtest_trades.csv")
 BACKTEST_SUMMARY_PATH = os.path.join(APP_DIR, "backtest_summary.csv")
 BACKTEST_LOG_PATH = os.path.join(APP_DIR, "backtest_run.log")
 
 
-def strategy_slug(content):
-    """Derive a filesystem-safe slug from the 'Strategy Name:' line, falling
+def strategy_slug(content, name_field="Strategy Name"):
+    """Derive a filesystem-safe slug from a '<name_field>: ...' line, falling
     back to a timestamp if the content doesn't declare one."""
-    match = re.search(r"Strategy Name:\s*(.+)", content)
+    match = re.search(rf"{re.escape(name_field)}:\s*(.+)", content)
     name = match.group(1).strip() if match else ""
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return slug or datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def backup_rules(content):
-    """Save the given rules.md content into Rules_backup, keyed by strategy name."""
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    filename = f"{strategy_slug(content)}_rules.md"
-    with open(os.path.join(BACKUP_DIR, filename), "w") as f:
+def backup_markdown(content, backup_dir, suffix, name_field="Strategy Name"):
+    """Save the given markdown content into backup_dir, keyed by the name
+    declared in name_field."""
+    os.makedirs(backup_dir, exist_ok=True)
+    filename = f"{strategy_slug(content, name_field=name_field)}_{suffix}.md"
+    with open(os.path.join(backup_dir, filename), "w", encoding="utf-8") as f:
         f.write(content)
     return filename
 
 
-def list_backups():
-    if not os.path.isdir(BACKUP_DIR):
+def list_backups(backup_dir):
+    if not os.path.isdir(backup_dir):
         return []
-    return sorted(f for f in os.listdir(BACKUP_DIR) if f.endswith(".md"))
+    return sorted(f for f in os.listdir(backup_dir) if f.endswith(".md"))
 
 st.set_page_config(page_title="Stock Screener", layout="wide")
 st.title("Stock Screener")
@@ -72,11 +75,11 @@ with tab_rules:
     guide_path = os.path.join(APP_DIR, "RULES_GUIDE.md")
     if os.path.exists(guide_path):
         with st.expander("New to rules.md? Read the guide"):
-            with open(guide_path, "r") as f:
+            with open(guide_path, "r", encoding="utf-8") as f:
                 st.markdown(f.read())
 
     if "rules_content" not in st.session_state:
-        with open(RULES_PATH, "r") as f:
+        with open(RULES_PATH, "r", encoding="utf-8") as f:
             st.session_state.rules_content = f.read()
 
     edited = st.text_area(
@@ -87,13 +90,13 @@ with tab_rules:
     )
 
     if st.button("Save rules.md"):
-        with open(RULES_PATH, "r") as f:
+        with open(RULES_PATH, "r", encoding="utf-8") as f:
             previous_content = f.read()
         if previous_content.strip() and previous_content != edited:
-            backup_name = backup_rules(previous_content)
+            backup_name = backup_markdown(previous_content, BACKUP_DIR, "rules")
             st.info(f"Backed up previous rules.md to Rules_backup/{backup_name}")
 
-        with open(RULES_PATH, "w") as f:
+        with open(RULES_PATH, "w", encoding="utf-8") as f:
             f.write(edited)
         st.session_state.rules_content = edited
         st.success("Saved rules.md")
@@ -101,26 +104,26 @@ with tab_rules:
     st.divider()
 
     st.subheader("Load a previous strategy")
-    backups = list_backups()
+    backups = list_backups(BACKUP_DIR)
     if not backups:
         st.caption("No backups yet. Backups are created automatically whenever you save a changed rules.md.")
     else:
         selected_backup = st.selectbox("Choose a backed-up strategy", backups)
         backup_path = os.path.join(BACKUP_DIR, selected_backup)
-        with open(backup_path, "r") as f:
+        with open(backup_path, "r", encoding="utf-8") as f:
             backup_content = f.read()
 
         with st.expander(f"Preview {selected_backup}"):
             st.code(backup_content, language="markdown")
 
         if st.button(f"Overwrite rules.md with {selected_backup}"):
-            with open(RULES_PATH, "r") as f:
+            with open(RULES_PATH, "r", encoding="utf-8") as f:
                 current_content = f.read()
             if current_content.strip() and current_content != backup_content:
-                backup_name = backup_rules(current_content)
+                backup_name = backup_markdown(current_content, BACKUP_DIR, "rules")
                 st.info(f"Backed up previous rules.md to Rules_backup/{backup_name}")
 
-            with open(RULES_PATH, "w") as f:
+            with open(RULES_PATH, "w", encoding="utf-8") as f:
                 f.write(backup_content)
             st.session_state.rules_content = backup_content
             st.success(f"rules.md overwritten with {selected_backup}")
@@ -171,7 +174,7 @@ def show_backtest_progress():
         return
 
     if os.path.exists(BACKTEST_LOG_PATH):
-        with open(BACKTEST_LOG_PATH, "r") as f:
+        with open(BACKTEST_LOG_PATH, "r", encoding="utf-8") as f:
             log_content = f.read()
         st.code(log_content[-3000:] or "Starting...")
 
@@ -187,17 +190,86 @@ def show_backtest_progress():
 with tab_backtest:
     st.subheader("Backtest the current strategy")
     st.caption(
-        "Simulates generated_rules.py over a historical date range. On each signal, "
-        "opens a flat Rs.100 trade at the next trading day's open, holds until your "
-        "stop-loss or take-profit hits (checked on daily closes only), or force-exits "
-        "at the range's last close if neither is hit."
+        "Simulates generated_rules.py over a historical date range using the exit "
+        "logic in generated_exit_strategy.py. On each signal, opens a flat Rs.100 "
+        "trade at the next trading day's open, holds until your exit strategy "
+        "triggers, or force-exits at the range's last close if it never does."
     )
 
     backtest_guide_path = os.path.join(APP_DIR, "BACKTEST_GUIDE.md")
     if os.path.exists(backtest_guide_path):
         with st.expander("New to backtesting? Read the guide"):
-            with open(backtest_guide_path, "r") as f:
+            with open(backtest_guide_path, "r", encoding="utf-8") as f:
                 st.markdown(f.read())
+
+    st.subheader("Exit strategy")
+    st.caption(
+        "Define your exit strategy in exit_rules.md, then generate it - the same "
+        "way rules.md drives generated_rules.py. Write your own logic here (fixed "
+        "SL/TP, trailing ATR, time-based, anything computable from OHLCV) instead "
+        "of picking from a fixed list of built-in options."
+    )
+
+    if "exit_rules_content" not in st.session_state:
+        with open(EXIT_RULES_PATH, "r", encoding="utf-8") as f:
+            st.session_state.exit_rules_content = f.read()
+
+    edited_exit_rules = st.text_area(
+        "Exit strategy rules",
+        value=st.session_state.exit_rules_content,
+        height=300,
+        label_visibility="collapsed",
+    )
+
+    exit_save_col, exit_gen_col = st.columns(2)
+    with exit_save_col:
+        if st.button("Save exit_rules.md"):
+            with open(EXIT_RULES_PATH, "r", encoding="utf-8") as f:
+                previous_content = f.read()
+            if previous_content.strip() and previous_content != edited_exit_rules:
+                backup_name = backup_markdown(previous_content, EXIT_BACKUP_DIR, "exit_rules")
+                st.info(f"Backed up previous exit_rules.md to ExitRules_backup/{backup_name}")
+
+            with open(EXIT_RULES_PATH, "w", encoding="utf-8") as f:
+                f.write(edited_exit_rules)
+            st.session_state.exit_rules_content = edited_exit_rules
+            st.success("Saved exit_rules.md")
+
+    with exit_gen_col:
+        if st.button("Generate exit strategy"):
+            with st.spinner("Generating exit logic..."):
+                code = run_script("generate_exit_strategy.py")
+            if code == 0:
+                st.success("generated_exit_strategy.py updated.")
+            else:
+                st.error(f"generate_exit_strategy.py exited with code {code}.")
+
+    with st.expander("Load a previous exit strategy"):
+        exit_backups = list_backups(EXIT_BACKUP_DIR)
+        if not exit_backups:
+            st.caption("No backups yet. Backups are created automatically whenever you save a changed exit_rules.md.")
+        else:
+            selected_exit_backup = st.selectbox("Choose a backed-up exit strategy", exit_backups)
+            exit_backup_path = os.path.join(EXIT_BACKUP_DIR, selected_exit_backup)
+            with open(exit_backup_path, "r", encoding="utf-8") as f:
+                exit_backup_content = f.read()
+
+            st.code(exit_backup_content, language="markdown")
+
+            if st.button(f"Overwrite exit_rules.md with {selected_exit_backup}"):
+                with open(EXIT_RULES_PATH, "r", encoding="utf-8") as f:
+                    current_content = f.read()
+                if current_content.strip() and current_content != exit_backup_content:
+                    backup_name = backup_markdown(current_content, EXIT_BACKUP_DIR, "exit_rules")
+                    st.info(f"Backed up previous exit_rules.md to ExitRules_backup/{backup_name}")
+
+                with open(EXIT_RULES_PATH, "w", encoding="utf-8") as f:
+                    f.write(exit_backup_content)
+                st.session_state.exit_rules_content = exit_backup_content
+                st.success(f"exit_rules.md overwritten with {selected_exit_backup}")
+                st.rerun()
+
+    st.divider()
 
     col1, col2 = st.columns(2)
     with col1:
@@ -205,35 +277,10 @@ with tab_backtest:
     with col2:
         end_date = st.date_input("End date")
 
-    exit_mode_label = st.radio(
-        "Exit strategy",
-        ["Fixed Stop-Loss / Take-Profit %", "Trailing ATR stop"],
-        horizontal=True,
-    )
-    exit_mode = "fixed" if exit_mode_label.startswith("Fixed") else "trailing_atr"
-
-    sl_pct = tp_pct = atr_period = atr_multiplier = None
-    if exit_mode == "fixed":
-        col3, col4 = st.columns(2)
-        with col3:
-            sl_pct = st.number_input("Stop-loss %", min_value=0.1, value=5.0, step=0.5)
-        with col4:
-            tp_pct = st.number_input("Take-profit %", min_value=0.1, value=10.0, step=0.5)
-    else:
-        st.caption(
-            "No fixed take-profit — lets winners run and exits only when price falls "
-            "atr_multiplier x ATR below the highest close since entry."
-        )
-        col3, col4 = st.columns(2)
-        with col3:
-            atr_period = st.number_input("ATR period (days)", min_value=2, value=14, step=1)
-        with col4:
-            atr_multiplier = st.number_input("ATR multiplier", min_value=0.5, value=3.0, step=0.5)
-
     st.caption(
         "First run for a given date range fetches history from NSE and caches it in "
-        "backtest_cache/; later runs over the same range (even with different "
-        "SL/TP) reuse that cache."
+        "backtest_cache/; later runs over the same range reuse that cache regardless "
+        "of exit strategy changes."
     )
 
     is_running = st.session_state.get("backtest_running", False)
@@ -268,12 +315,7 @@ with tab_backtest:
             args = [
                 "--start", start_date.isoformat(),
                 "--end", end_date.isoformat(),
-                "--exit-mode", exit_mode,
             ]
-            if exit_mode == "fixed":
-                args += ["--sl", str(sl_pct), "--tp", str(tp_pct)]
-            else:
-                args += ["--atr-period", str(int(atr_period)), "--atr-multiplier", str(atr_multiplier)]
 
             log_file = open(BACKTEST_LOG_PATH, "w")
             process = subprocess.Popen(
@@ -296,11 +338,17 @@ with tab_backtest:
     if is_running:
         show_backtest_progress()
 
-    if os.path.exists(BACKTEST_SUMMARY_PATH):
+    if os.path.exists(BACKTEST_SUMMARY_PATH) and os.path.getsize(BACKTEST_SUMMARY_PATH) > 0:
         st.divider()
         st.subheader("Summary by ClosenessScore bucket")
-        st.dataframe(pd.read_csv(BACKTEST_SUMMARY_PATH), use_container_width=True)
+        try:
+            st.dataframe(pd.read_csv(BACKTEST_SUMMARY_PATH), use_container_width=True)
+        except pd.errors.EmptyDataError:
+            st.caption("No trades were simulated in the last run, so there's no summary to bucket.")
 
-    if os.path.exists(BACKTEST_TRADES_PATH):
+    if os.path.exists(BACKTEST_TRADES_PATH) and os.path.getsize(BACKTEST_TRADES_PATH) > 0:
         st.subheader("Individual trades")
-        st.dataframe(pd.read_csv(BACKTEST_TRADES_PATH), use_container_width=True)
+        try:
+            st.dataframe(pd.read_csv(BACKTEST_TRADES_PATH), use_container_width=True)
+        except pd.errors.EmptyDataError:
+            st.caption("No trades were simulated in the last run.")
