@@ -154,6 +154,12 @@ Critical implementation constraints:
   lower_bb = bb[lower_bb_col].iloc[-1]
   Apply the same prefix-matching approach for any other multi-column
   pandas_ta indicator (MACD, Stochastic, ADX, etc.).
+- Some pandas_ta indicators return a single-column pandas Series instead of
+  a DataFrame (e.g. ta.rsi() with a single length). Never call `.columns` on
+  the result without first checking `isinstance(result, pd.DataFrame)`.
+  If it is a DataFrame, select the column by prefix as above; if it is a
+  Series, use it directly. Apply this check for every pandas_ta call whose
+  return type (Series vs DataFrame) is not certain.
 - The top-level try/except in evaluate_stock must never swallow the error
   message. On exception, append f"Calculation error: {{e}}" (the actual
   exception text) to FailedRules, not a generic "Calculation error" string.

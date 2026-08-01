@@ -41,6 +41,8 @@ rules.md  --(Gemini)-->  generated_rules.py  --(used by)-->  stock_screener.py -
 
 ## Setup
 
+Note: This project works best with python@3.12
+
 1. **Install dependencies:**
 
    ```bash

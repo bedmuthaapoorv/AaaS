@@ -2,10 +2,10 @@
 
 ## Strategy Metadata
 
-Strategy Name: Oversold Mean Reversion
+Strategy Name: Trendline Support Momentum
 Market: India (NSE/BSE)
 Timeframe: Daily
-Holding Period: Swing Trade (3-15 Days)
+Holding Period: Swing Trade (1-30 Days)
 
 ---
 
@@ -13,133 +13,119 @@ Holding Period: Swing Trade (3-15 Days)
 
 All rules below MUST pass.
 
-### Rule 1: Oversold RSI
+### Rule 1: Increasing Volume
 
 Description:
-Stock must be meaningfully oversold, signaling exhaustion of the recent
-selling pressure rather than a stock that is merely dipping.
+Volume should show increasing participation over the last 3 completed trading sessions.
+
+Condition:
+
+Volume[-1] > Volume[-2]
+AND
+Volume[-2] > Volume[-3]
+
+Notes:
+- Ignore today's volume.
+- Use only completed market sessions.
+- Stocks with missing volume data should be rejected.
+
+---
+
+### Rule 2: RSI Range
+
+Description:
+Avoid overbought and oversold stocks.
 
 Indicator:
 RSI(14)
 
 Condition:
 
-RSI <= 30
+40 <= RSI <= 60
 
 Notes:
 - Use daily timeframe.
 - Calculate using 14 periods.
-- Stocks with missing RSI data should be rejected.
 
 ---
 
-### Rule 2: Extended Below Mean
+### Rule 3: No Recent 52 Week High
 
 Description:
-Price must be stretched well below its recent average, since mean reversion
-trades need meaningful distance to revert back toward.
-
-Indicator:
-20-Day Simple Moving Average (SMA20)
+Avoid stocks that recently hit a new 52-week high.
 
 Condition:
 
-Close < SMA20
-AND
-DistanceFromSMA20 >= 5%
+DaysSince52WeekHigh > 30
 
-Where:
+Alternative Implementation:
 
-DistanceFromSMA20 = ((SMA20 - Close) / SMA20) * 100
-
-Notes:
-- Use only completed sessions.
-- Stocks with fewer than 20 sessions of history should be rejected.
+HighestHigh(252) was NOT made within last 30 trading sessions
 
 ---
 
-### Rule 3: Bollinger Band Breach
+### Rule 4: Sector Strength
 
 Description:
-Price should be trading at or below the lower Bollinger Band, a classic
-statistical extreme suggesting the move is overdone in the short term.
-
-Indicator:
-Bollinger Bands (20, 2)
+Stock must belong to a sector showing strong relative performance this month.
 
 Condition:
 
-Close <= LowerBollingerBand
+SectorRank <= Top 5
 
----
+Suggested Sector Ranking Formula:
 
-### Rule 4: Volume Capitulation
-
-Description:
-Look for a spike in volume on the down move, suggesting capitulation
-(panic selling) rather than a slow, low-conviction drift lower — capitulation
-volume often marks a local bottom.
-
-Condition:
-
-Volume[-1] > (1.5 * AverageVolume20)
-
-Where:
-
-AverageVolume20 = 20-day average volume, excluding today.
-
-Notes:
-- Ignore today's volume.
-- Stocks with missing volume data should be rejected.
-
----
-
-### Rule 5: No Structural Breakdown
-
-Description:
-Exclude stocks that are oversold because of a structural/fundamental
-breakdown (extended downtrend) rather than a short-term overreaction —
-mean reversion works best on stocks still in a broader uptrend or range,
-not stocks in a persistent downtrend.
-
-Indicator:
-100-Day Simple Moving Average (SMA100)
-
-Condition:
-
-Close >= (0.85 * SMA100)
-
-Notes:
-- Stocks with fewer than 100 sessions of history should be rejected.
-- This rule filters out stocks that are down more than 15% below their
-  longer-term trend, which usually reflects a broken trend rather than a
-  short-term dip.
-
----
-
-### Rule 6: Avoid Weak Sectors
-
-Description:
-Prefer reversion candidates from sectors that are not themselves in a
-structural downtrend, since individual-stock reversion is more reliable
-when it isn't fighting sector-wide weakness.
-
-Condition:
-
-SectorRank <= Top 10
+SectorReturnLast30Days
++
+SectorVolumeGrowth
++
+RelativePerformanceVsNifty
 
 Notes:
 - Determine sector performance using all stocks in the sector.
-- Rank sectors by recent average return.
-- This is intentionally a looser cutoff (top 10, not top 5) since mean
-  reversion candidates are, by definition, short-term underperformers even
-  within strong sectors.
+- Rank sectors monthly.
+- Only consider stocks from the top 5 sectors.
 
 ---
 
+### Rule 5: Clean Trendline Support
+
+Description:
+Stock should be trading near a well-defined ascending trendline support
+that has been established over a minimum of 6 months (approximately 126
+trading days).
+
+Requirements:
+
+Minimum 2 confirmed touch points.
+
+Touch points should be separated by at least 10 trading days.
+
+Trendline must originate from at least 126 trading days ago (6 months).
+
+No major breakdown below trendline during last 126 trading days.
+
+Current price must be within 3% of trendline.
+
+Stock must be trading above its 126-day (6-month) moving average.
+
+Condition:
+
+TrendlineTouches >= 2
+AND
+DistanceFromTrendline <= 3%
+AND
+TrendlineSlope > 0
+AND
+TrendlineOrigin >= 126 trading days ago
+AND
+Close > MA(126)
+AND
+NoBreadownBelow(Trendline, 126 days)
+
 ## Rejection Rules
 
-Reject stock if ANY mandatory filter fails.
+Reject stock if ANY condition is true.
 
 ---
 
@@ -150,27 +136,17 @@ After filtering, rank candidates.
 ### Rank Score
 
 Score =
-35% Oversold Severity
+40% Trendline Quality
 +
-30% Distance From Mean
+25% Sector Strength
 +
-20% Volume Capitulation Strength
+20% Volume Growth
 +
-15% Sector Strength
+15% RSI Closeness To 50
 
 Where:
 
-Oversold Severity Score = max(0, (30 - RSI) * (100 / 30))
-(0 at RSI=30, 100 at RSI=0)
-
-Distance From Mean Score = min(100, DistanceFromSMA20 * 10)
-(capped at 100; 10% distance or more scores 100)
-
-Volume Capitulation Score = min(100, ((Volume[-1] / AverageVolume20) - 1) * 100)
-(capped at 100; 2x average volume or more scores 100)
-
-Sector Strength Score = max(0, 100 - (SectorRank - 1) * 10)
-(rank 1 = 100, declining 10 points per rank)
+RSI Score = 100 - abs(RSI - 50)
 
 Higher score is better.
 
@@ -185,13 +161,14 @@ Return:
 - Sector
 - Current Price
 - RSI(14)
-- SMA20
-- Distance From SMA20 (%)
-- Lower Bollinger Band
 - Volume[-1]
+- Volume[-2]
+- Volume[-3]
 - 20D Average Volume
-- SMA100
+- Days Since 52 Week High
 - Sector Rank
+- Trendline Touch Count
+- Distance From Trendline (%)
 - Rank Score
 
 Sort:
