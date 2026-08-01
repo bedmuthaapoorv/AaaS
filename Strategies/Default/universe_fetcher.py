@@ -40,7 +40,7 @@ def get_top_stocks_by_sector(limit_per_sector=50):
     # Check cache first
     if os.path.exists(CACHE_FILE):
         try:
-            with open(CACHE_FILE, 'r') as f:
+            with open(CACHE_FILE, 'r', encoding='utf-8') as f:
                 cached_data = json.load(f)
                 cache_date = datetime.fromisoformat(cached_data['timestamp'])
                 if datetime.now() - cache_date < timedelta(days=CACHE_EXPIRY_DAYS):
@@ -108,7 +108,7 @@ def get_top_stocks_by_sector(limit_per_sector=50):
 
     # Save to cache
     try:
-        with open(CACHE_FILE, 'w') as f:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
             json.dump({
                 "timestamp": datetime.now().isoformat(),
                 "universe": top_stocks

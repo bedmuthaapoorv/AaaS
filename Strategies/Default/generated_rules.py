@@ -5,7 +5,8 @@ import pandas_ta as ta
 def evaluate_stock(symbol, df, universe, sector_ranks):
     failed_rules = []
     details = {}
-    
+    passed = True
+
     try:
         if len(df) < 252:
             return {"Symbol": symbol, "Passed": False, "ClosenessScore": 0.0, "FailedRules": ["Insufficient data"], "Details": {}}
@@ -76,10 +77,14 @@ def evaluate_stock(symbol, df, universe, sector_ranks):
         }
 
     except Exception as e:
-        return {
-            "Symbol": symbol,
-            "Passed": False,
-            "ClosenessScore": 0.0,
-            "FailedRules": [f"Calculation error: {str(e)}"],
-            "Details": {}
-        }
+        passed = False
+        failed_rules.append(f"Calculation error: {str(e)}")
+        closeness = 0.0
+
+    return {
+        "Symbol": symbol,
+        "Passed": passed,
+        "ClosenessScore": float(closeness),
+        "FailedRules": failed_rules,
+        "Details": details
+    }

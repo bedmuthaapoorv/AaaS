@@ -23,31 +23,35 @@ A stock can open **multiple simultaneous trades** if it signals again while
 an earlier trade on it is still open — each signal is treated as its own
 independent ₹100 bet.
 
-### Exit strategy: Fixed SL/TP vs. Trailing ATR
+### Exit strategy: defined in `exit_rules.md`, just like `rules.md`
 
-Choose one in the UI before running:
+The exit strategy isn't a fixed set of built-in options — it works exactly
+like the entry strategy:
 
-- **Fixed Stop-Loss / Take-Profit %** (default) — exits the moment the
-  closing price crosses either a fixed % below entry (stop-loss) or a fixed
-  % above entry (take-profit). Tagged `SL` or `TP` in the trade output.
-- **Trailing ATR stop** — no fixed take-profit at all; instead it trails a
-  stop below the trade's highest close so far, letting winners run as long
-  as the trend holds:
-  - At entry, computes ATR (Average True Range) over your chosen period
-    (default 14 days), using only data through the signal day — no
-    look-ahead.
-  - That ATR value is fixed for the life of the trade (not recalculated
-    daily) — this keeps the stop's distance stable and avoids the trade
-    getting a tighter/looser stop just because volatility changed later.
-  - Each day, the stop is `(highest close since entry) - (ATR multiplier x
-    ATR at entry)`. If a day's close falls to or below that level, the trade
-    exits, tagged `TrailingATR`.
-  - A larger ATR multiplier (e.g. 4-5) gives the trade more room to breathe
-    before stopping out; a smaller one (e.g. 1.5-2) cuts losers faster but
-    also exits winners sooner on ordinary pullbacks.
-  - If there isn't enough history yet to compute the ATR at signal time
-    (very early in the date range), that particular signal is skipped
-    rather than opening an unprotected trade.
+```
+exit_rules.md  --(Gemini)-->  generated_exit_strategy.py  --(used by)-->  backtest.py
+```
+
+Write your exit logic in plain English in `exit_rules.md` (in the Backtest
+tab, or directly in the file), click **"Generate exit strategy"** to turn it
+into `generated_exit_strategy.py` (a `resolve_exit(...)` function), and the
+backtester calls that function to decide when each trade closes. Anything
+computable from OHLCV price history works — fixed stop-loss/take-profit
+percentages, a trailing ATR stop, a moving-average cross exit, a fixed
+holding period, or something else entirely. The default `exit_rules.md`
+ships with a Fixed Stop-Loss (5%) / Take-Profit (10%) strategy.
+
+One thing you never need to specify: what happens if your exit condition
+never fires. `backtest.py` itself — not the generated exit logic — always
+force-closes any still-open trade at the last available close in your date
+range, tagged `RangeEnd`. This guarantee holds no matter what you write in
+`exit_rules.md`, so a regenerated exit strategy can never accidentally leave
+a trade open forever.
+
+`exit_rules.md` gets the same backup treatment as `rules.md`: saving a
+changed version automatically backs up the previous one to
+`ExitRules_backup/`, and you can restore any previous exit strategy from a
+dropdown in the Backtest tab.
 
 ## Estimated time before you run
 
@@ -61,9 +65,10 @@ local computation once the data is in hand.
 - If stocks still need fetching: expect roughly **a few seconds per
   uncached stock** (NSE requests, including retries on slow responses) —
   the estimate range widens for a fresh date range with nothing cached yet.
-- Changing only the Stop-Loss/Take-Profit values while keeping the same
-  date range reuses the cache entirely — that re-run should always be fast
-  regardless of the original fetch time.
+- Changing only your exit strategy (editing `exit_rules.md` and
+  regenerating) while keeping the same date range reuses the price-history
+  cache entirely — that re-run should always be fast regardless of the
+  original fetch time.
 
 ## Stopping a run midway
 
@@ -87,8 +92,7 @@ One row per simulated trade:
 | `EntryPrice` | That day's opening price. |
 | `ExitDate` | The day the trade closed out. |
 | `ExitPrice` | The closing price on the exit day. |
-| `ExitReason` | `SL` / `TP` (fixed mode), `TrailingATR` (ATR mode), or `RangeEnd` (nothing triggered before the date range ended — forced exit). |
-| `ATRAtEntry` | The ATR value used to size the trailing stop (trailing ATR mode only; blank for fixed mode). |
+| `ExitReason` | Whatever tag your exit strategy uses (e.g. `SL`, `TP`, `TrailingATR`), or `RangeEnd` if nothing triggered before the date range ended (forced exit). |
 | `ClosenessScore` | The strategy's own ranking score (0-100) at signal time. |
 | `ProfitRs` | Profit in rupees on the flat ₹100 stake (equivalently, % return). |
 
