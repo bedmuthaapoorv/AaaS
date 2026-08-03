@@ -35,7 +35,16 @@ The generated file must contain:
 1. All necessary imports.
 2. A function:
 
-def evaluate_stock(symbol, df, universe, sector_ranks):
+def evaluate_stock(symbol, df, universe, sector_ranks, market_breadth):
+
+Where market_breadth (float, 0-100) is the percentage of the entire stock
+universe currently trading above its own 50-day moving average, computed
+once per day across all stocks (not specific to this symbol). It is a
+broad market regime signal - a stand-in for a Nifty benchmark index, since
+no external index data is available. If the RULES below define a market
+breadth filter, implement it using this parameter directly - do not attempt
+to compute breadth yourself from `df` (a single stock's own data cannot
+tell you about the whole market).
 
 3. The function must return:
 

@@ -38,7 +38,7 @@ warnings.filterwarnings("ignore")
 import pandas as pd
 
 from universe_fetcher import get_top_stocks_by_sector
-from nse_utils import fetch_stock_history, calculate_sector_strength
+from nse_utils import fetch_stock_history, calculate_sector_strength, calculate_market_breadth
 import generated_rules
 import generated_exit_strategy
 
@@ -271,10 +271,11 @@ def run_backtest(start_date, end_date, limit_per_sector=50, progress_callback=No
             continue
 
         sector_ranks_today = calculate_sector_strength(snapshot, universe)
+        market_breadth_today = calculate_market_breadth(snapshot)
 
         for symbol, df_slice in snapshot.items():
             try:
-                result = generated_rules.evaluate_stock(symbol, df_slice, universe, sector_ranks_today)
+                result = generated_rules.evaluate_stock(symbol, df_slice, universe, sector_ranks_today, market_breadth_today)
             except Exception:
                 continue
 
@@ -294,6 +295,84 @@ def run_backtest(start_date, end_date, limit_per_sector=50, progress_callback=No
     trades_df = pd.DataFrame(trades, columns=trade_columns)
     summary_df = summarize_trades(trades_df)
     return trades_df, summary_df
+
+
+def simulate_portfolio(trades_df, initial_capital=100000.0, max_concurrent_positions=10):
+    """
+    Simulates a real, capital-constrained portfolio on top of the already
+    fully-resolved trade list from run_backtest() (each trade's entry/exit
+    dates and % return are computed independently of capital - this
+    function only decides which signals the portfolio actually had room to
+    fund, and compounds capital as positions open and close).
+
+    Position sizing: each newly funded trade gets
+    (current total equity) / max_concurrent_positions - an equal-weight
+    slot recomputed fresh each time, so position size compounds with
+    portfolio growth. When more signals fire on a day than there are free
+    slots, higher ClosenessScore gets priority; the rest are marked
+    unfunded (skipped for lack of capital), not opened at a smaller size.
+
+    Returns (portfolio_df, trades_df) where portfolio_df is a chronological
+    equity curve (Date, Equity) and trades_df is the input with two added
+    columns: Funded (bool) and AllocatedCapital (float).
+    """
+    trades = trades_df.copy()
+    if trades.empty:
+        trades["Funded"] = pd.Series(dtype=bool)
+        trades["AllocatedCapital"] = pd.Series(dtype=float)
+        return pd.DataFrame(columns=["Date", "Equity"]), trades
+
+    trades["EntryDate"] = pd.to_datetime(trades["EntryDate"])
+    trades["ExitDate"] = pd.to_datetime(trades["ExitDate"])
+
+    entries_by_date = {}
+    for idx, row in trades.iterrows():
+        entries_by_date.setdefault(row["EntryDate"], []).append(idx)
+
+    cash = initial_capital
+    open_positions = {}  # idx -> allocated capital
+    funded = {}
+    allocated = {}
+    equity_curve = []
+
+    all_dates = sorted(set(trades["EntryDate"]).union(trades["ExitDate"]))
+    for date in all_dates:
+        # Exits before entries on the same day, so freed capital is
+        # available for same-day reinvestment.
+        exits_today = trades.index[trades["ExitDate"] == date]
+        for idx in exits_today:
+            if funded.get(idx):
+                profit_pct = trades.loc[idx, "ProfitRs"]
+                cash += open_positions.pop(idx) * (1 + profit_pct / 100)
+
+        entries_today = sorted(
+            entries_by_date.get(date, []),
+            key=lambda i: trades.loc[i, "ClosenessScore"],
+            reverse=True,
+        )
+        for idx in entries_today:
+            if len(open_positions) >= max_concurrent_positions:
+                funded[idx] = False
+                continue
+            total_equity = cash + sum(open_positions.values())
+            size = total_equity / max_concurrent_positions
+            if size <= cash:
+                open_positions[idx] = size
+                cash -= size
+                funded[idx] = True
+                allocated[idx] = size
+            else:
+                funded[idx] = False
+
+        equity_curve.append({"Date": date, "Equity": cash + sum(open_positions.values())})
+
+    trades["Funded"] = trades.index.map(lambda i: funded.get(i, False))
+    trades["AllocatedCapital"] = trades.index.map(lambda i: round(allocated.get(i, 0.0), 2))
+    trades["EntryDate"] = trades["EntryDate"].dt.date
+    trades["ExitDate"] = trades["ExitDate"].dt.date
+
+    portfolio_df = pd.DataFrame(equity_curve)
+    return portfolio_df, trades
 
 
 def summarize_trades(trades_df):
@@ -329,8 +408,11 @@ def main():
     parser.add_argument("--start", required=True, type=_parse_date, help="Start date YYYY-MM-DD")
     parser.add_argument("--end", required=True, type=_parse_date, help="End date YYYY-MM-DD")
     parser.add_argument("--limit-per-sector", type=int, default=50)
+    parser.add_argument("--initial-capital", type=float, default=100000.0, help="Starting portfolio capital, e.g. 100000")
+    parser.add_argument("--max-positions", type=int, default=10, help="Max number of concurrent open positions")
     parser.add_argument("--trades-out", default="backtest_trades.csv")
     parser.add_argument("--summary-out", default="backtest_summary.csv")
+    parser.add_argument("--portfolio-out", default="backtest_portfolio.csv")
     args = parser.parse_args()
 
     def progress(done, total, day):
@@ -342,13 +424,30 @@ def main():
         progress_callback=progress,
     )
 
+    portfolio_df, trades_df = simulate_portfolio(
+        trades_df, initial_capital=args.initial_capital, max_concurrent_positions=args.max_positions
+    )
+
     trades_df.to_csv(args.trades_out, index=False)
     summary_df.to_csv(args.summary_out, index=False)
+    portfolio_df.to_csv(args.portfolio_out, index=False)
 
     print(f"\n{len(trades_df)} trades simulated.")
     print(summary_df.to_string(index=False))
+
+    if not portfolio_df.empty:
+        final_equity = portfolio_df["Equity"].iloc[-1]
+        total_return_pct = (final_equity - args.initial_capital) / args.initial_capital * 100
+        funded_count = int(trades_df["Funded"].sum())
+        skipped_count = len(trades_df) - funded_count
+        print(f"\n--- PORTFOLIO ({args.max_positions} concurrent slots, Rs.{args.initial_capital:,.0f} start) ---")
+        print(f"Funded trades: {funded_count} (skipped for lack of capital: {skipped_count})")
+        print(f"Final equity: Rs.{final_equity:,.2f}")
+        print(f"Total return: {total_return_pct:.2f}%")
+
     print(f"\nTrades saved to {args.trades_out}")
     print(f"Summary saved to {args.summary_out}")
+    print(f"Portfolio equity curve saved to {args.portfolio_out}")
 
 
 if __name__ == "__main__":

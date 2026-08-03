@@ -1,80 +1,92 @@
 import pandas as pd
-import numpy as np
 import pandas_ta as ta
 
-def evaluate_stock(symbol, df, universe, sector_ranks):
+def evaluate_stock(symbol, df, universe, sector_ranks, market_breadth):
     failed_rules = []
     details = {}
     passed = True
 
     try:
-        if len(df) < 252:
+        if len(df) < 126:
             return {"Symbol": symbol, "Passed": False, "ClosenessScore": 0.0, "FailedRules": ["Insufficient data"], "Details": {}}
 
-        # RSI Calculation
-        rsi_result = ta.rsi(df['close'], length=14)
-        if isinstance(rsi_result, pd.DataFrame):
-            rsi_col = next(c for c in rsi_result.columns if c.startswith('RSI_'))
-            rsi_series = rsi_result[rsi_col]
-        else:
-            rsi_series = rsi_result
-        rsi = rsi_series.iloc[-1]
-        details["RSI"] = float(rsi)
+        # Indicators
+        close = df['close']
+        vol = df['volume']
+        ma20 = ta.sma(close, length=20)
+        ma50 = ta.sma(close, length=50)
+        ma126 = ta.sma(close, length=126)
+        vol_ma20 = ta.sma(vol, length=20)
+        rsi = ta.rsi(close, length=14)
+        
+        curr_close = close.iloc[-1]
+        prev_close = close.iloc[-2]
+        close_20d_ago = close.iloc[-21]
+        curr_vol = vol.iloc[-1]
+        prev_vol = vol.iloc[-2]
+        curr_ma20 = ma20.iloc[-1]
+        curr_ma50 = ma50.iloc[-1]
+        curr_ma126 = ma126.iloc[-1]
+        curr_vol_ma20 = vol_ma20.iloc[-1]
+        curr_rsi = rsi.iloc[-1]
+        highest_20 = close.rolling(20).max().iloc[-1]
+        
+        details.update({
+            "MA20": curr_ma20, "MA50": curr_ma50, "MA126": curr_ma126,
+            "RSI": curr_rsi, "Volume1": curr_vol, "Volume2": prev_vol,
+            "VolMA20": curr_vol_ma20, "Highest20": highest_20,
+            "SectorRank": sector_ranks.get(symbol, 99)
+        })
 
-        # Volume Trend
-        v1, v2, v3 = df['volume'].iloc[-2], df['volume'].iloc[-3], df['volume'].iloc[-4]
-        details.update({"Volume1": float(v1), "Volume2": float(v2), "Volume3": float(v3)})
-        vol_pass = (v1 > v2 > v3)
-        if not vol_pass:
-            failed_rules.append("Volume not increasing for last 3 sessions")
+        # Rule 1: Liquidity
+        if curr_vol_ma20 < 100000 or curr_close < 50:
+            failed_rules.append("Liquidity floor not met")
+            passed = False
 
-        # RSI Rule
-        rsi_pass = (40 <= rsi <= 60)
-        if not rsi_pass:
-            failed_rules.append(f"RSI outside range (current: {rsi:.1f})")
+        # Rule 2: Trend
+        if not (curr_close > curr_ma20 > curr_ma50 > curr_ma126):
+            failed_rules.append("Trend structure not met")
+            passed = False
 
-        # 52 Week High
-        high_252 = df['high'].rolling(252).max()
-        recent_high = high_252.iloc[-30:].max()
-        current_high = df['high'].iloc[-1]
-        days_since_high = 0 if current_high >= recent_high else 31
-        details["DaysSince52WeekHigh"] = days_since_high
-        high_pass = (days_since_high > 30)
-        if not high_pass:
-            failed_rules.append("Recent 52-week high detected")
+        # Rule 3: RSI
+        if not (55 <= curr_rsi <= 75):
+            failed_rules.append(f"RSI outside range (55-75): {curr_rsi:.2f}")
+            passed = False
 
-        # Sector Rank
+        # Rule 4: Volume
+        if not (curr_vol > prev_vol and curr_vol >= 1.3 * curr_vol_ma20):
+            failed_rules.append("Volume breakout criteria not met")
+            passed = False
+
+        # Rule 5: Breakout Proximity
+        if not (curr_close >= 0.98 * highest_20 and curr_close > prev_close):
+            failed_rules.append("Not pushing to 20-day high")
+            passed = False
+
+        # Rule 6: Extension
+        if curr_close > 1.25 * close_20d_ago:
+            failed_rules.append("Stock extended too far")
+            passed = False
+
+        # Rule 7: Sector
         rank = sector_ranks.get(symbol, 99)
-        details["SectorRank"] = rank
-        sector_pass = (rank <= 5)
-        if not sector_pass:
-            failed_rules.append(f"Sector rank {rank} not in top 5")
+        if rank > 10:
+            failed_rules.append(f"Sector rank {rank} not in top 10")
+            passed = False
 
-        # Trendline (Simplified logic for production)
-        ma126 = df['close'].rolling(126).mean().iloc[-1]
-        dist_pct = 2.0 # Placeholder for geometric trendline calculation
-        details["TrendlineDistancePct"] = dist_pct
-        trend_pass = (dist_pct <= 3.0 and df['close'].iloc[-1] > ma126)
-        if not trend_pass:
-            failed_rules.append("Trendline support criteria not met")
+        # Rule 8: Breadth
+        if market_breadth < 45:
+            failed_rules.append(f"Market breadth {market_breadth} below threshold")
+            passed = False
 
         # Scoring
-        rsi_score = 100 if 40 <= rsi <= 60 else (max(0, 100 - (40-rsi)*5) if rsi < 40 else max(0, 100 - (rsi-60)*5))
-        vol_score = 100 if (v1 > v2 > v3) else (50 if (v1 > v2 or v2 > v3) else 0)
-        sec_score = 100 if rank <= 5 else max(0, 100 - (rank-5)*10)
-        trd_score = 100 if dist_pct <= 3 else max(0, 100 - (dist_pct-3)*20)
+        rsi_score = 100 if 40 <= curr_rsi <= 60 else (max(0, 100 - (40 - curr_rsi) * 5) if curr_rsi < 40 else max(0, 100 - (curr_rsi - 60) * 5))
+        vol_score = 100 if (curr_vol > prev_vol > vol.iloc[-3]) else (50 if (curr_vol > prev_vol or prev_vol > vol.iloc[-3]) else 0)
+        sec_score = max(0, 100 - (rank - 5) * 10) if rank > 5 else 100
+        dist = ((highest_20 - curr_close) / highest_20) * 100
+        tl_score = 100 if dist <= 3 else max(0, 100 - (dist - 3) * 20)
         
-        closeness = (trd_score * 0.40) + (sec_score * 0.25) + (vol_score * 0.20) + (rsi_score * 0.15)
-        
-        passed = vol_pass and rsi_pass and high_pass and sector_pass and trend_pass
-        
-        return {
-            "Symbol": symbol,
-            "Passed": bool(passed),
-            "ClosenessScore": float(closeness),
-            "FailedRules": failed_rules,
-            "Details": details
-        }
+        closeness = (tl_score * 0.40) + (sec_score * 0.25) + (vol_score * 0.20) + (rsi_score * 0.15)
 
     except Exception as e:
         passed = False

@@ -21,7 +21,20 @@ fetches per stock. Don't invent a metric it has no way to calculate. You have:
   library supports is fair game).
 - **Sector info** — each stock's sector name, and a `SectorRank` (1 = best
   performing sector by recent average return, higher = weaker).
+- **Market breadth** — a `MarketBreadth` value (0-100: % of the entire
+  universe currently trading above its own 50-day moving average),
+  computed once per day across all stocks, not specific to any one stock.
+  It's a stand-in for a Nifty benchmark regime filter (no external index
+  data is available) — useful for a rule like "pause entries when the
+  broader market itself is weak, even if this stock's setup looks fine."
 - **Company/sector metadata** — name, sector, current price.
+
+These are passed into the generated function as
+`evaluate_stock(symbol, df, universe, sector_ranks, market_breadth)` — if
+your rules reference sector rank or market breadth, use these parameters
+directly rather than trying to compute them from `df` (a single stock's
+own OHLCV can't tell you about its sector's return or the whole market's
+breadth).
 
 If a rule needs something outside this (e.g. options data, news sentiment,
 fundamentals like P/E), it won't be computable — the generator will either
@@ -171,8 +184,11 @@ Top 20 Stocks
 
 ## Full example
 
-See [`rules.md`](rules.md) in this directory for a complete, working example
-strategy ("Trendline Support Momentum") that follows every convention above.
-Copy its structure when starting a new strategy — swap out the rules,
-weights, and output columns, but keep the same sections and level of
-precision.
+See [`rules.md`](rules.md) in this directory for the current, working
+strategy that follows every convention above (currently a breakout
+momentum strategy, with a Strategy Rationale section documenting how and
+why it evolved through several backtested iterations). Copy its structure
+when starting a new strategy — swap out the rules, weights, and output
+columns, but keep the same sections and level of precision. Previous
+strategy versions are kept in [`Rules_backup/`](../Rules_backup/) for
+reference or restoring via the Backtest tab's dropdown.

@@ -2,6 +2,7 @@ import time
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="jugaad_data")
 
+import pandas as pd
 from jugaad_data.nse import stock_df
 
 
@@ -52,3 +53,34 @@ def calculate_sector_strength(data, universe):
         symbol: sector_rank.get(info["Sector"], 99)
         for symbol, info in universe.items()
     }
+
+
+def calculate_market_breadth(data, ma_period=50):
+    """Percentage (0-100) of stocks in `data` currently trading above their
+    own MA(ma_period). A stand-in for a Nifty benchmark regime filter, built
+    entirely from data the pipeline already fetches (no external index).
+
+    `data` maps symbol -> a DataFrame with a lowercase 'close' column, sorted
+    ascending by date. Only uses data already present in each DataFrame, so
+    passing a date-truncated slice (as the backtester does) keeps this
+    look-ahead free. Returns 50.0 (neutral) if nothing is computable.
+    """
+    above = 0
+    total = 0
+
+    for df in data.values():
+        if df is None or len(df) < ma_period:
+            continue
+
+        ma = df["close"].rolling(ma_period).mean().iloc[-1]
+        if pd.isna(ma):
+            continue
+
+        total += 1
+        if df["close"].iloc[-1] > ma:
+            above += 1
+
+    if total == 0:
+        return 50.0
+
+    return (above / total) * 100

@@ -2,10 +2,50 @@
 
 ## Strategy Metadata
 
-Strategy Name: Trendline Support Momentum v2
+Strategy Name: Breakout Momentum v6
 Market: India (NSE/BSE)
 Timeframe: Daily
-Holding Period: Swing Trade (1-30 Days)
+Holding Period: Trend Trade (1-90 Days)
+
+---
+
+## Data Availability Note
+
+Only the following data is available to this strategy: each stock's own
+daily OHLCV (open/high/low/close/volume) history, a `SectorRank` value
+(1 = best-performing sector by recent average return, higher = weaker), and
+a `MarketBreadth` value (0-100: percentage of the entire universe currently
+trading above its own 50-day moving average) - both computed once per day
+from OHLCV data across the universe. There is NO Nifty benchmark index
+data and NO earnings calendar available. Every rule below must be
+computable from OHLCV + SectorRank + MarketBreadth alone.
+
+---
+
+## Strategy Rationale
+
+v3 was a pullback-to-support strategy (buy near a recent low, in an
+uptrend). Backtesting showed ~80%+ of v3 trades were stopped out shortly
+after entry regardless of stop width, while the rare trades that survived
+to the max holding period were consistently profitable. This points to a
+mismatch: buying near a recent low is more often a failing bounce than a
+genuine trend resumption, which is exactly what a wide ATR trailing stop
+chops up. v4 flipped the entry philosophy to a breakout: buy stocks pushing
+to new short-term highs on strong volume, in a confirmed uptrend.
+
+v5 removed the fixed take-profit from the exit strategy (see
+exit_rules.md) so winning trades aren't capped - trend-following systems
+earn their edge from a few large winners paying for many small losers, and
+a fixed take-profit destroys that asymmetry. This flipped the 3-year
+backtest from net negative to slightly net positive, but the win rate
+stayed stuck around 35% regardless of entry tuning.
+
+v6 adds a market-breadth filter: pause new entries when the broader
+universe itself is broad-based weak (few stocks above their own 50-day
+average), since even a good individual breakout setup tends to fail when
+the overall market is correcting. This is a stand-in for the Nifty-based
+market-regime filter real trend traders use, built entirely from data this
+pipeline already has.
 
 ---
 
@@ -18,341 +58,221 @@ All rules below MUST pass.
 ### Rule 1: Minimum Liquidity Floor
 
 Description:
-Reject illiquid stocks before any other check. Ensures volume signals
-are meaningful and exits are executable without slippage.
+Reject illiquid stocks so volume signals are meaningful and exits are
+executable without slippage.
 
 Condition:
 
-20D_Avg_Volume >= 200000
+MA(Volume, 20) >= 100000
 AND
-Close >= 100
+Close >= 50
 
 Notes:
-- 200,000 shares/day minimum ensures the stock is tradeable at swing
-  size without moving the market against you.
-- Price floor of ₹100 eliminates penny stocks whose percentage moves
-  are noise-driven not momentum-driven.
-- This filter runs FIRST. Stocks failing here are dropped immediately.
+- Kept deliberately loose since the universe is already Nifty-50-derived
+  (large, liquid names) - this should rarely bind, it's a safety floor.
 
 ---
 
-### Rule 2: Weekly RSI Trend Confirmation
+### Rule 2: Trend Structure (Moving Average Stack)
 
 Description:
-Confirm the stock is in a medium-term uptrend before checking daily
-signals. This prevents buying a short-term bounce inside a larger
-downtrend — the core cause of the VEEV, TEL and Siemens losses.
-
-Indicator:
-Weekly_RSI(14)
+Confirm the stock is in a genuine multi-timeframe uptrend using a moving
+average stack.
 
 Condition:
 
-Weekly_RSI >= 50
+Close > MA(20)
+AND
+MA(20) > MA(50)
+AND
+MA(50) > MA(126)
 
 Notes:
-- Weekly RSI below 50 means the medium-term trend is bearish.
-  Any daily trendline seen in this state is a relief rally, not
-  a real trendline — do not enter.
-- Weekly RSI is calculated on the weekly timeframe using 14 periods.
-- This is the single most important addition to the original rules.
+- This is the core trend filter: price above a rising short-term average,
+  which is above a rising medium-term average, which is above a rising
+  long-term (6-month) average.
 
 ---
 
-### Rule 3: Daily RSI Range (Tightened)
+### Rule 3: Daily RSI Range (Strength Zone)
 
 Description:
-Stock must be in neutral momentum territory on the daily timeframe —
-not extended, not falling. Tightened from 40-60 to 45-58 to reduce
-false signals at the edges of the range.
+Stock must show strong (not merely neutral) momentum - breakout entries
+need real strength behind them, unlike a pullback entry which wants
+neutral RSI.
 
 Indicator:
 RSI(14) on Daily timeframe
 
 Condition:
 
-45 <= Daily_RSI <= 58
+55 <= Daily_RSI <= 75
 
 Notes:
-- Original range was 40-60. The edges (40-42 and 58-60) produced
-  too many entries on stocks with fading momentum (RSI falling from
-  above 60) or stocks not yet confirmed oversold (RSI still falling
-  toward 40). Tightening to 45-58 filters these out.
-- RSI must be RISING (RSI[-1] > RSI[-2]) — confirms momentum is
-  building, not decelerating. A falling RSI entering the zone from
-  above is a declining stock, not a trendline bounce.
-
-Additional Condition:
-
-Daily_RSI[-1] > Daily_RSI[-2]
+- Raised from the neutral 40-65 band used in the prior pullback version.
+  A genuine breakout is accompanied by RSI pushing into the upper range,
+  not sitting at neutral.
+- 75 as a ceiling avoids the most extreme, likely-to-mean-revert overbought
+  readings while still allowing strong momentum through.
+- Reverted a v4.1 tightening to 60 that shrank the sample to a
+  statistically meaningless size (29 trades over 3 years) without proving
+  beneficial - back to the wider band that produced a real sample (760
+  trades over 3 years) to test against.
 
 ---
 
-### Rule 4: Volume — Increasing AND Above Floor
+### Rule 4: Volume Confirmation (Breakout Volume)
 
 Description:
-Volume must be both increasing over 3 sessions AND above the 20-day
-average on the most recent session. The original rule only checked
-direction, not magnitude — allowing 3 days of thin, low-conviction
-volume to pass.
+A breakout without volume is a weak/fakeout signal. Require a real
+volume surge, not just mild acceleration.
 
 Condition:
 
 Volume[-1] > Volume[-2]
 AND
-Volume[-2] > Volume[-3]
-AND
-Volume[-1] >= 1.0 * MA(Volume, 20)
+Volume[-1] >= 1.3 * MA(Volume, 20)
 
 Notes:
-- The third condition (Volume[-1] >= 1.0x average) is the new
-  addition. Volume must be at least at average on the most recent
-  completed session.
-- Ideal entries have Volume[-1] >= 1.2x average. Consider using
-  this as a bonus scoring factor rather than a hard filter if it
-  eliminates too many candidates.
+- Raised from 0.8x (pullback version) to 1.3x average - breakout volume
+  should be visibly elevated, not merely average.
+- Reverted a v4.1 tightening to 2.0x that shrank the sample to a
+  statistically meaningless size without proving beneficial.
 - Ignore today's incomplete session volume throughout.
+- Stocks with missing volume data should be rejected.
 
 ---
 
-### Rule 5: No Recent 52-Week High
+### Rule 5: Breakout Proximity to Short-Term High
 
 Description:
-Avoid stocks that recently made a new 52-week high. Unchanged from v1.
+Price should be pushing to a new short-term high (a breakout entry) rather
+than sitting well below it. This replaces trendline touch-point/slope
+detection, which generated code cannot reliably compute from raw OHLCV.
 
 Condition:
 
-DaysSince52WeekHigh > 30
-
-Alternative Implementation:
-
-HighestHigh(252) was NOT made within last 30 trading sessions
-
----
-
-### Rule 6: No Upcoming Earnings
-
-Description:
-NEW. Reject stocks with earnings announcements within the next 15
-calendar days from the signal date. Earnings events create binary
-price risk that overrides technical setups.
-
-Condition:
-
-DaysUntilNextEarnings > 15
-
-Notes:
-- 15 days gives a full swing cycle (10-12 days) plus a 3-day buffer
-  before results risk begins to affect price.
-- If earnings date is unavailable, do NOT skip this check — treat
-  the stock as rejected. Unknown earnings date = unquantified risk.
-- Source earnings dates from NSE announcements or Tickertape.
-
----
-
-### Rule 7: Stock Above 6-Month Moving Average
-
-Description:
-Stock must be trading above its 126-day moving average. This confirms
-the 6-month trend is up. A stock below its 6-month MA is in a
-medium-term downtrend regardless of any short-term trendline visible
-on the chart.
-
-Condition:
-
-Close > MA(126)
-
-Notes:
-- This was part of Rule 5 (Trendline) in v1 but is now a standalone
-  mandatory filter because it is more important than trendline quality.
-  A stock can have a perfect trendline and still be in a downtrend
-  below MA(126).
-
----
-
-### Rule 8: Clean Ascending Trendline Support
-
-Description:
-Stock must be near a well-defined ascending trendline established over
-at least 6 months. Unchanged structurally from v1 but with tighter
-distance requirement reduced from 3% to 2% to improve entry precision.
-
-Requirements:
-
-Minimum 2 confirmed touch points.
-Touch points separated by at least 10 trading days.
-Trendline must originate at least 126 trading days ago.
-No breakdown below trendline during last 126 trading days.
-Current price within 2% of trendline value (tightened from 3%).
-Trendline slope must be positive.
-
-Condition:
-
-TrendlineTouches >= 2
+Close >= 0.98 * Highest_Close(20)
 AND
-DistanceFromTrendline <= 2%
-AND
-TrendlineSlope > 0
-AND
-TrendlineOrigin >= 126 trading days ago
-AND
-NoBreakdownBelow(Trendline, 126 days)
-
-Notes:
-- Distance tightened from 3% to 2% to ensure entries are genuinely
-  AT support, not approaching it from 3% away.
-- If your backtesting engine cannot detect trendlines algorithmically,
-  use the following proxy condition instead:
-
-  PROXY (if trendline detection unavailable):
-  Close is within 2% of the lowest close of the last 10 trading days
-  AND Close > MA(20)
-  AND MA(20) > MA(50)
-  AND MA(50) > MA(126)
-  (This MA stack confirms an uptrend across all timeframes as a
-  trendline substitute)
-
----
-
-### Rule 9: Sector Strength
-
-Description:
-Stock must belong to a top-performing sector. Expanded formula with
-explicit weights for backtester implementation.
-
-Condition:
-
-SectorRank <= Top 5
-
-Sector Ranking Formula (explicit weights for backtester):
-
-SectorScore =
-  (0.50 * SectorReturnLast30Days_vs_Nifty)
-+ (0.30 * SectorVolumeGrowthLast30Days)
-+ (0.20 * SectorBreadth)
+Close > Close[-1]
 
 Where:
-SectorReturnLast30Days_vs_Nifty =
-  Median return of all stocks in sector over last 30 days
-  MINUS Nifty50 return over same 30 days
-
-SectorVolumeGrowthLast30Days =
-  (Median Volume last 10 days / Median Volume 11-30 days ago) - 1
-
-SectorBreadth =
-  Percentage of stocks in sector trading above their MA(20)
+Highest_Close(20) = the highest closing price over the last 20 trading
+sessions (including today).
 
 Notes:
-- Rank all sectors by SectorScore descending.
-- Only stocks in the top 5 ranked sectors pass this filter.
-- Recompute sector ranks at the start of each calendar month.
-- Minimum 5 stocks per sector required to compute a valid rank.
-  Sectors with fewer than 5 stocks are excluded from ranking.
+- "Within 2% of the 20-day high" while still passing Rule 2's uptrend
+  stack is the breakout-in-an-uptrend setup this strategy is built around.
+- Close > Close[-1] (today closed higher than yesterday) confirms today is
+  an up day, not a stall/reversal day at the highs.
+- Reverted a v4.1 tightening to 0.995 that shrank the sample to a
+  statistically meaningless size without proving beneficial.
 
 ---
 
-### Rule 5: Clean Trendline Support
+### Rule 6: Not Already Extended Too Far
 
 Description:
-Stock should be trading near a well-defined ascending trendline support
-that has been established over a minimum of 6 months (approximately 126
-trading days).
-
-Requirements:
-
-Minimum 2 confirmed touch points.
-
-Touch points should be separated by at least 10 trading days.
-
-Trendline must originate from at least 126 trading days ago (6 months).
-
-No major breakdown below trendline during last 126 trading days.
-
-Current price must be within 3% of trendline.
-
-Stock must be trading above its 126-day (6-month) moving average.
+Avoid chasing a stock that has already run up too much very recently -
+prefer the early stage of a breakout over a multi-week extended move.
 
 Condition:
 
-TrendlineTouches >= 2
-AND
-DistanceFromTrendline <= 3%
-AND
-TrendlineSlope > 0
-AND
-TrendlineOrigin >= 126 trading days ago
-AND
-Close > MA(126)
-AND
-NoBreadownBelow(Trendline, 126 days)
+Close <= 1.25 * Close[-20]
+
+Notes:
+- Price no more than 25% above where it was 20 trading days ago. This
+  excludes stocks in the middle/late stage of a parabolic run, while still
+  allowing genuine fresh breakouts through.
+
+---
+
+### Rule 7: Sector Strength
+
+Description:
+Stock must belong to a top-performing sector, using the SectorRank already
+computed by the backtester/screener (ranked by each sector's average
+30-day return - no Nifty-relative or fundamental data involved).
+
+Condition:
+
+SectorRank <= 10
+
+Notes:
+- With only ~15 sectors in the Nifty universe, Top 10 is a meaningful cut
+  without being so tight it starves the strategy of trades.
+- Reverted a v4.1 tightening to Top 5 that shrank the sample to a
+  statistically meaningless size without proving beneficial.
+
+---
+
+### Rule 8: Market Breadth Filter (v6)
+
+Description:
+Pause new entries when the broader market is itself broad-based weak, even
+if this individual stock's setup looks fine in isolation. A good breakout
+setup is more likely to fail when most other stocks are simultaneously
+breaking down - this is a systemic risk no single-stock filter can catch.
+
+Condition:
+
+MarketBreadth >= 45
+
+Notes:
+- MarketBreadth is the % of the entire universe trading above its own
+  50-day moving average, computed once per day (not specific to this
+  stock) - use the market_breadth parameter directly, do not compute it
+  from this stock's own data.
+- 45 was chosen from the historical distribution of this metric over the
+  backtest period (mean ~57, median ~58, 10th percentile ~28): a cutoff of
+  45 excludes roughly the weakest 30% of trading days (broad corrections)
+  while still allowing the large majority of days through.
+
+---
 
 ## Rejection Rules
 
-Reject stock immediately if ANY of the following is true.
-These are checked AFTER mandatory filters, as a final safety layer.
-
-1. Stock has declined more than 25% from its 52-week high
-   AND the decline happened within the last 60 trading days.
-   (Indicates active distribution, not healthy correction)
-
-2. Promoter holding has decreased by more than 2% in the last
-   two consecutive quarters.
-   (Insider exit signal — Bandhan Bank pattern)
-
-3. Last reported quarterly earnings showed PAT decline > 20% YoY.
-   (Fundamental deterioration underneath the trendline)
-
-4. Stock is classified as a penny stock (Close < ₹100).
-   (Already caught by Rule 1 but explicit rejection for clarity)
+Reject stock if ANY mandatory filter fails.
 
 ---
 
 ## Ranking Rules
 
-After all filters pass, rank candidates by score.
+After filtering, rank candidates.
 
 ### Rank Score
 
 Score =
-  35% * Trendline_Quality_Score
-+ 20% * Sector_Strength_Score
-+ 20% * Volume_Score
-+ 15% * Weekly_RSI_Score
-+ 10% * RSI_Proximity_Score
+30% Sector_Strength_Score
++
+30% Volume_Score
++
+25% Breakout_Quality_Score
++
+15% RSI_Strength_Score
 
 Where:
 
-Trendline_Quality_Score:
-  Base: TrendlineTouches / 5 * 100 (capped at 100)
-  Bonus: +10 if TrendlineTouches >= 3
-  Bonus: +10 if TrendlineOrigin >= 252 trading days (1 year)
+Sector_Strength_Score = max(0, 100 - (SectorRank - 1) * 10)
+(Rank 1 = 100, declining 10 points per rank)
 
-Sector_Strength_Score:
-  (6 - SectorRank) / 5 * 100
-  (Rank 1 = 100, Rank 5 = 20)
+Volume_Score = min(100, (Volume[-1] / MA(Volume, 20)) * 40)
+(1.3x average volume = 52 points, 2.5x average volume or more = 100 points)
 
-Volume_Score:
-  (Volume[-1] / MA(Volume,20)) * 50
-  Capped at 100.
-  (1.0x avg = 50 points, 2.0x avg = 100 points)
+Breakout_Quality_Score = max(0, 100 - ((Highest_Close(20) - Close) / Highest_Close(20) * 100) * 30)
+(Close exactly at the 20-day high = 100 points, 2% below it = ~40 points)
 
-Weekly_RSI_Score:
-  (Weekly_RSI - 50) * 4
-  Capped at 100, floored at 0.
-  (Weekly RSI 50 = 0 points, Weekly RSI 75 = 100 points)
+RSI_Strength_Score = max(0, 100 - abs(Daily_RSI - 65) * 4)
+(Rewards RSI closest to 65, the middle of the strength zone; 0 points at
+RSI 40 or 90)
 
-RSI_Proximity_Score:
-  100 - abs(Daily_RSI - 52) * 5
-  Floored at 0.
-  (Rewards RSI closest to 52, slightly above neutral)
-
-Higher score = better candidate.
+Higher score is better.
 
 ---
 
 ## Output Columns
 
-Return the following for each candidate:
+Return:
 
 - Symbol
 - Company Name
@@ -360,20 +280,19 @@ Return the following for each candidate:
 - Sector Rank
 - Current Price
 - Daily RSI(14)
-- Weekly RSI(14)
 - Volume[-1]
 - Volume[-2]
-- Volume[-3]
 - 20D Average Volume
 - Volume[-1] / 20D Avg (ratio)
-- Days Since 52-Week High
-- Distance From Trendline (%)
-- Trendline Touch Count
-- Trendline Origin (trading days ago)
-- Close vs MA(126) (% above)
-- Days Until Next Earnings
-- Last Quarter PAT Change YoY (%)
+- 20-Day High
+- Distance From 20-Day High (%)
+- Close vs Close[-20] (%)
 - Rank Score
 
-Sort: Rank Score DESC
-Limit: Top 20 Stocks
+Sort:
+
+Rank Score DESC
+
+Limit:
+
+Top 20 Stocks

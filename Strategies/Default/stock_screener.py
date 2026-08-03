@@ -11,7 +11,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 from universe_fetcher import get_top_stocks_by_sector
-from nse_utils import fetch_stock_history, calculate_sector_strength
+from nse_utils import fetch_stock_history, calculate_sector_strength, calculate_market_breadth
 
 # 1. Fetch Dynamic Stock Universe by Sector
 print("Initializing Dynamic Stock Universe...")
@@ -66,7 +66,7 @@ def find_trendline_touches(df):
     
     return touches, distance, slope
 
-def analyze_stocks(data, universe, sector_ranks):
+def analyze_stocks(data, universe, sector_ranks, market_breadth):
     results = []
 
     import generated_rules
@@ -80,7 +80,8 @@ def analyze_stocks(data, universe, sector_ranks):
                 symbol,
                 df,
                 universe,
-                sector_ranks
+                sector_ranks,
+                market_breadth
             )
 
             if result:
@@ -103,7 +104,8 @@ def main():
     tickers = list(STOCK_UNIVERSE.keys())
     data = fetch_data(tickers)
     sector_ranks = calculate_sector_strength(data, STOCK_UNIVERSE)
-    results = analyze_stocks(data, STOCK_UNIVERSE, sector_ranks)
+    market_breadth = calculate_market_breadth(data)
+    results = analyze_stocks(data, STOCK_UNIVERSE, sector_ranks, market_breadth)
 
     if not results:
         print("No results generated.")

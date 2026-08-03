@@ -17,6 +17,7 @@ EXIT_RULES_PATH = os.path.join(APP_DIR, "exit_rules.md")
 EXIT_BACKUP_DIR = os.path.normpath(os.path.join(APP_DIR, "..", "ExitRules_backup"))
 BACKTEST_TRADES_PATH = os.path.join(APP_DIR, "backtest_trades.csv")
 BACKTEST_SUMMARY_PATH = os.path.join(APP_DIR, "backtest_summary.csv")
+BACKTEST_PORTFOLIO_PATH = os.path.join(APP_DIR, "backtest_portfolio.csv")
 BACKTEST_LOG_PATH = os.path.join(APP_DIR, "backtest_run.log")
 
 
@@ -277,6 +278,20 @@ with tab_backtest:
     with col2:
         end_date = st.date_input("End date")
 
+    col3, col4 = st.columns(2)
+    with col3:
+        initial_capital = st.number_input("Starting capital (Rs.)", min_value=1000.0, value=100000.0, step=10000.0)
+    with col4:
+        max_positions = st.number_input("Max concurrent positions", min_value=1, value=10, step=1)
+
+    st.caption(
+        "Signals compete for a fixed number of position slots, sized as an equal "
+        "share of current total equity (so position size compounds with growth). "
+        "When more signals fire on a day than there are free slots, the highest "
+        "ClosenessScore gets priority; the rest are skipped for lack of capital, "
+        "not opened at a smaller size."
+    )
+
     st.caption(
         "First run for a given date range fetches history from NSE and caches it in "
         "backtest_cache/; later runs over the same range reuse that cache regardless "
@@ -315,6 +330,8 @@ with tab_backtest:
             args = [
                 "--start", start_date.isoformat(),
                 "--end", end_date.isoformat(),
+                "--initial-capital", str(initial_capital),
+                "--max-positions", str(int(max_positions)),
             ]
 
             log_file = open(BACKTEST_LOG_PATH, "w")
@@ -337,6 +354,36 @@ with tab_backtest:
 
     if is_running:
         show_backtest_progress()
+
+    if os.path.exists(BACKTEST_PORTFOLIO_PATH) and os.path.getsize(BACKTEST_PORTFOLIO_PATH) > 0:
+        st.divider()
+        st.subheader("Portfolio result")
+        try:
+            portfolio_df = pd.read_csv(BACKTEST_PORTFOLIO_PATH, parse_dates=["Date"])
+            if not portfolio_df.empty and os.path.exists(BACKTEST_TRADES_PATH):
+                trades_for_capital = pd.read_csv(BACKTEST_TRADES_PATH)
+                final_equity = portfolio_df["Equity"].iloc[-1]
+                total_return_pct = (final_equity - initial_capital) / initial_capital * 100
+                funded_count = int(trades_for_capital["Funded"].sum()) if "Funded" in trades_for_capital.columns else 0
+                skipped_count = len(trades_for_capital) - funded_count
+
+                span_days = (portfolio_df["Date"].max() - portfolio_df["Date"].min()).days
+                years = span_days / 365.25
+                if years > 0 and final_equity > 0:
+                    cagr_pct = ((final_equity / initial_capital) ** (1 / years) - 1) * 100
+                    cagr_display = f"{cagr_pct:+.2f}%/yr"
+                else:
+                    cagr_display = "N/A"
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Final equity", f"Rs.{final_equity:,.0f}", f"{total_return_pct:+.2f}% total")
+                m2.metric("CAGR", cagr_display, help="Compound annual growth rate - the total return spread evenly across years, so it's comparable to things like FD/index annual returns rather than a lump 3-year figure.")
+                m3.metric("Funded trades", funded_count)
+                m4.metric("Skipped (no capital)", skipped_count)
+
+                st.line_chart(portfolio_df.set_index("Date")["Equity"])
+        except pd.errors.EmptyDataError:
+            st.caption("No portfolio data from the last run.")
 
     if os.path.exists(BACKTEST_SUMMARY_PATH) and os.path.getsize(BACKTEST_SUMMARY_PATH) > 0:
         st.divider()

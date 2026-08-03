@@ -21,7 +21,49 @@ uses. Whenever a stock signals a pass:
 
 A stock can open **multiple simultaneous trades** if it signals again while
 an earlier trade on it is still open — each signal is treated as its own
-independent ₹100 bet.
+independent ₹100 bet when resolving *whether and when* it would have exited.
+
+### Portfolio simulation: what "total return" actually means
+
+The per-trade ₹100 numbers above answer "did this setup tend to work,"
+but they don't by themselves answer "would this strategy have grown my
+money" — trades overlap in time, and a real account only has so much
+capital to go around. The **Portfolio result** section answers that
+question directly:
+
+- You set a **starting capital** (e.g. ₹100,000) and a **max concurrent
+  positions** count (e.g. 10 — a fixed number of position "slots").
+- Every already-resolved trade above is replayed in chronological order.
+  When a signal's entry date arrives and a slot is free, it gets funded at
+  an equal share of *current total equity* (so position size compounds as
+  the portfolio grows or shrinks) — otherwise it's recorded as **skipped
+  for lack of capital**, not opened smaller.
+- When multiple signals want a slot on the same day and there aren't enough
+  free ones, the highest `ClosenessScore` gets priority.
+- Capital from a closing trade becomes available the same day for new
+  entries.
+
+This is what "Final equity" and "Total return %" mean, and it's the
+number that actually corresponds to "if I ran this strategy with ₹X, would
+I have ₹1.1X after 3 years" — the individual ₹100-per-trade stats above do
+not.
+
+**Total return is cumulative over the whole date range, not per-year.** A
+"+13% total return" over a 3-year backtest is not "13% a year" - it's 13%
+across the entire period. `CAGR` (compound annual growth rate) is shown
+alongside it specifically to answer "what's the equivalent steady yearly
+rate," which is the number actually comparable to things like a bank FD
+rate or an index's annual return. A large total-return number over a long
+date range can correspond to a fairly modest CAGR - always check CAGR
+before judging a result as strong or weak.
+
+**Position count is a real lever, not just a detail.** With very few
+slots, most signals get skipped (shown as "Skipped (no capital)"), so the
+result depends heavily on *which* signals happened to get funded, not just
+the average edge across all of them. Try a few different slot counts to
+see how sensitive the result is - a strategy whose portfolio return swings
+wildly with slot count is telling you the funded subset matters as much as
+the underlying signal quality.
 
 ### Exit strategy: defined in `exit_rules.md`, just like `rules.md`
 
@@ -38,8 +80,13 @@ into `generated_exit_strategy.py` (a `resolve_exit(...)` function), and the
 backtester calls that function to decide when each trade closes. Anything
 computable from OHLCV price history works — fixed stop-loss/take-profit
 percentages, a trailing ATR stop, a moving-average cross exit, a fixed
-holding period, or something else entirely. The default `exit_rules.md`
-ships with a Fixed Stop-Loss (5%) / Take-Profit (10%) strategy.
+holding period, or something else entirely. The current `exit_rules.md`
+uses an ATR(14) trailing stop (2.5x ATR, ratcheting up only) with **no
+fixed take-profit** — winners are only closed by the trailing stop giving
+back 2.5x ATR from their peak, or a 90-trading-day max holding backstop.
+This was a deliberate change (see `rules.md`'s Strategy Rationale section):
+a fixed take-profit caps the rare large winners that a momentum/trend
+strategy depends on to offset its more frequent small losers.
 
 One thing you never need to specify: what happens if your exit condition
 never fires. `backtest.py` itself — not the generated exit logic — always
@@ -95,6 +142,14 @@ One row per simulated trade:
 | `ExitReason` | Whatever tag your exit strategy uses (e.g. `SL`, `TP`, `TrailingATR`), or `RangeEnd` if nothing triggered before the date range ended (forced exit). |
 | `ClosenessScore` | The strategy's own ranking score (0-100) at signal time. |
 | `ProfitRs` | Profit in rupees on the flat ₹100 stake (equivalently, % return). |
+| `Funded` | Whether the portfolio simulation actually had a free slot/capital to take this trade. |
+| `AllocatedCapital` | How much of the portfolio was put into this trade, if funded (blank/0 otherwise). |
+
+### Portfolio equity curve (`backtest_portfolio.csv`)
+
+One row per date, tracking total portfolio value (cash + value of open
+positions) as the simulation progresses — this is what the line chart in
+the Portfolio result section plots.
 
 ### Summary by ClosenessScore bucket (`backtest_summary.csv`)
 
