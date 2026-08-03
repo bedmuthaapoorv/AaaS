@@ -93,7 +93,7 @@ with tab_rules:
     if st.button("Save rules.md"):
         with open(RULES_PATH, "r", encoding="utf-8") as f:
             previous_content = f.read()
-        if previous_content.strip() and previous_content != edited:
+        if previous_content.strip():
             backup_name = backup_markdown(previous_content, BACKUP_DIR, "rules")
             st.info(f"Backed up previous rules.md to Rules_backup/{backup_name}")
 
@@ -227,7 +227,7 @@ with tab_backtest:
         if st.button("Save exit_rules.md"):
             with open(EXIT_RULES_PATH, "r", encoding="utf-8") as f:
                 previous_content = f.read()
-            if previous_content.strip() and previous_content != edited_exit_rules:
+            if previous_content.strip():
                 backup_name = backup_markdown(previous_content, EXIT_BACKUP_DIR, "exit_rules")
                 st.info(f"Backed up previous exit_rules.md to ExitRules_backup/{backup_name}")
 

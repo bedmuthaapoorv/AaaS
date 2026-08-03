@@ -25,6 +25,7 @@ Strategies/Default/stock_report.csv
 Strategies/Default/universe_cache.json
 Strategies/Default/backtest_trades.csv
 Strategies/Default/backtest_summary.csv
+Strategies/Default/backtest_portfolio.csv
 Strategies/Default/backtest_cache/
 Strategies/Default/backtest_run.log
 Strategies/universe_cache.json
