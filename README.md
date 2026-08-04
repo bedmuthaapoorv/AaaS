@@ -1,4 +1,4 @@
-# Strategies — AI-Assisted Swing Trading Screener & Backtester
+# Frontier Tradelight — AI-Assisted Swing Trading Screener & Backtester
 
 An AI-assisted stock screener and backtester for the Indian market (NSE).
 You describe an **entry strategy** and an **exit strategy** in plain
