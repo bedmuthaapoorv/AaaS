@@ -31,10 +31,9 @@ def resolve_exit(entry_price, entry_date, signal_history_df, future_df):
                 highest_close = close
             
             # Step 2: Ratchet Trailing Stop
-            # ATR(14) only needs a small trailing window to converge - avoid
-            # carrying the entire historical dataframe through every day's
-            # recomputation (trades can now walk up to 90 days).
-            combined_df = pd.concat([signal_history_df.tail(60), future_df.loc[:current_date]])
+            # Need history up to current day to compute ATR
+            # Combine signal_history_df and future_df up to current date
+            combined_df = pd.concat([signal_history_df, future_df.loc[:current_date]])
             atr_today_series = ta.atr(combined_df['high'], combined_df['low'], combined_df['close'], length=14)
             atr_today = atr_today_series.iloc[-1]
             

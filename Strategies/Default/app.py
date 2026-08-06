@@ -375,13 +375,35 @@ with tab_backtest:
                 else:
                     cagr_display = "N/A"
 
-                m1, m2, m3, m4 = st.columns(4)
+                running_max = portfolio_df["Equity"].cummax()
+                drawdown_pct = (portfolio_df["Equity"] - running_max) / running_max * 100
+                max_dd_pct = drawdown_pct.min()
+
+                m1, m2, m3, m4, m5 = st.columns(5)
                 m1.metric("Final equity", f"Rs.{final_equity:,.0f}", f"{total_return_pct:+.2f}% total")
                 m2.metric("CAGR", cagr_display, help="Compound annual growth rate - the total return spread evenly across years, so it's comparable to things like FD/index annual returns rather than a lump 3-year figure.")
-                m3.metric("Funded trades", funded_count)
-                m4.metric("Skipped (no capital)", skipped_count)
+                m3.metric("Max drawdown", f"{max_dd_pct:.1f}%", help="Largest peak-to-trough drop in equity during the run. A high CAGR next to a deep drawdown means the return came with real pain along the way, not steady compounding.")
+                m4.metric("Funded trades", funded_count)
+                m5.metric("Skipped (no capital)", skipped_count)
 
                 st.line_chart(portfolio_df.set_index("Date")["Equity"])
+
+                with st.expander("Year-by-year breakdown"):
+                    st.caption(
+                        "A single CAGR over a multi-year range can hide a lot - a return "
+                        "dominated by one exceptional year looks the same in that headline "
+                        "number as one built from steady, repeatable years. Check here "
+                        "before trusting the CAGR above as a forward expectation."
+                    )
+                    yearly_df = portfolio_df.copy()
+                    yearly_df["Year"] = yearly_df["Date"].dt.year
+                    yearly = yearly_df.groupby("Year")["Equity"].agg(["first", "last"])
+                    yearly["Return %"] = (yearly["last"] - yearly["first"]) / yearly["first"] * 100
+                    yearly = yearly.rename(columns={"first": "Start Equity", "last": "End Equity"})
+                    st.dataframe(
+                        yearly.style.format({"Start Equity": "Rs.{:,.0f}", "End Equity": "Rs.{:,.0f}", "Return %": "{:+.1f}%"}),
+                        use_container_width=True,
+                    )
         except pd.errors.EmptyDataError:
             st.caption("No portfolio data from the last run.")
 

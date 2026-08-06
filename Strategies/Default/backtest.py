@@ -107,10 +107,62 @@ def _cache_path(symbol, from_date, to_date):
     return os.path.join(CACHE_DIR, key)
 
 
+def _dedupe_same_day_rows(df):
+    """jugaad-data's underlying NSE source occasionally returns two rows for
+    the same calendar date at a chunk boundary: one genuine OHLCV bar (real
+    high != low) and one degenerate settlement-price-only placeholder bar
+    (open == high == low == close). Keep the genuine bar; drop the
+    placeholder. Left undeduped, a duplicate index corrupts every rolling
+    window (RSI/ATR/MA) computed over the series from that point forward."""
+    if not df.index.duplicated(keep=False).any():
+        return df
+
+    is_placeholder = (df["open"] == df["high"]) & (df["high"] == df["low"]) & (df["low"] == df["close"])
+    # Sort so within each duplicate date, real bars (is_placeholder=False)
+    # sort before placeholders, then keep the first (real) row per date.
+    df = df.assign(_placeholder=is_placeholder).sort_values(["date", "_placeholder"])
+    df = df[~df.index.duplicated(keep="first")].drop(columns="_placeholder")
+    return df.sort_index()
+
+
+def _adjust_for_splits_and_bonuses(df, threshold=0.65):
+    """Detect and back-adjust for unadjusted stock splits / bonus issues.
+
+    The NSE history this pipeline fetches is NOT split/bonus-adjusted - a
+    split shows up as a genuine ~50-90% overnight drop in the raw close
+    price with no corresponding move in the stock's actual value. Left as
+    -is, this reads as a catastrophic single-day crash to every rule and
+    exit condition (RSI, ATR, trailing stops), fabricating impossible
+    losses that never happened to a real position.
+
+    Detects a day-over-day close ratio outside [threshold, 1/threshold]
+    (i.e. more than a ~35% move in either direction - far past any
+    realistic single-day move for a Nifty-adjacent large-cap without a
+    circuit-breaker halt) and back-adjusts every prior row's OHLC by that
+    ratio (and volume inversely), the same technique used to build a
+    standard split-adjusted price series.
+    """
+    close = df["close"].values
+    ratios = close[1:] / close[:-1]
+    split_idxs = [i + 1 for i, r in enumerate(ratios) if r < threshold or r > 1 / threshold]
+    if not split_idxs:
+        return df
+
+    df = df.copy()
+    df["volume"] = df["volume"].astype(float)
+    for idx in split_idxs:
+        factor = df["close"].iloc[idx] / df["close"].iloc[idx - 1]
+        price_cols = ["open", "high", "low", "close"]
+        df.iloc[:idx, df.columns.get_indexer(price_cols)] *= factor
+        df.iloc[:idx, df.columns.get_loc("volume")] /= factor
+    return df
+
+
 def _load_symbol_history(symbol, from_date, to_date):
     """Fetch (or load cached) daily history for a symbol, normalized to
-    lowercase OHLCV columns indexed by date, ascending. Historical ranges
-    are immutable once in the past, so this cache never expires."""
+    lowercase OHLCV columns indexed by date, ascending, deduplicated, and
+    split/bonus-adjusted. Historical ranges are immutable once in the past,
+    so this cache never expires."""
     cache_path = _cache_path(symbol, from_date, to_date)
     if os.path.exists(cache_path):
         return pd.read_csv(cache_path, parse_dates=["date"], index_col="date")
@@ -129,6 +181,9 @@ def _load_symbol_history(symbol, from_date, to_date):
     })
     df = df[["open", "high", "low", "close", "volume"]]
     df.index.name = "date"
+
+    df = _dedupe_same_day_rows(df)
+    df = _adjust_for_splits_and_bonuses(df)
 
     df.to_csv(cache_path)
     return df
